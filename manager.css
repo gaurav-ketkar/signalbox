@@ -1,0 +1,400 @@
+:root {
+  color-scheme: light dark;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --bg: #ffffff;
+  --subtle: #f6f8fa;
+  --border: #d1d9e0;
+  --accent: #0969da;
+  --danger: #b62324;
+  --success: #1a7f37;
+  --button-bg: #1f883d;
+  --button-hover: #1a7f37;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #f0f6fc;
+    --muted: #b1bac4;
+    --bg: #0d1117;
+    --subtle: #151b23;
+    --border: #3d444d;
+    --accent: #79c0ff;
+    --danger: #ff939a;
+    --success: #7ee787;
+    --button-bg: #238636;
+    --button-hover: #2a963f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+main {
+  max-width: 760px;
+  margin: 40px auto;
+  padding: 0 28px;
+}
+
+html[data-popup] {
+  width: 420px;
+}
+
+[data-popup] main {
+  margin: 0;
+  padding: 20px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.intro {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.inbox-link {
+  display: inline-block;
+  padding: 4px 0;
+  font-weight: 500;
+}
+
+label,
+.field-label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+textarea,
+input,
+select {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+#summary-form {
+  margin-top: 16px;
+}
+
+.server-label {
+  margin-top: 16px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 16px 0 0;
+  font-weight: 400;
+}
+
+.checkbox-label input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+textarea {
+  min-height: 84px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+
+textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+button {
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--subtle);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+button.primary {
+  border-color: var(--button-bg);
+  background: var(--button-bg);
+  color: #ffffff;
+}
+
+button.primary:hover:not(:disabled) {
+  border-color: var(--button-hover);
+  background: var(--button-hover);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.text-button {
+  padding: 4px 2px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+
+.text-button:hover:not(:disabled) {
+  border-color: transparent;
+  text-decoration: underline;
+}
+
+.help {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+code {
+  font-size: 12px;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-top: 14px;
+}
+
+.form-actions .help {
+  margin: 0;
+}
+
+.current-page {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--subtle);
+}
+
+.current-page > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.current-page .field-label {
+  margin-bottom: 2px;
+  font-size: 12px;
+}
+
+.current-page button {
+  flex: 0 0 auto;
+}
+
+.status {
+  min-height: 20px;
+  margin-top: 12px;
+  color: var(--success);
+  font-size: 13px;
+}
+
+.error {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.saved-section {
+  margin-top: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+}
+
+.list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.count {
+  display: inline-block;
+  min-width: 24px;
+  margin-left: 6px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: center;
+}
+
+.saved-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.saved-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.saved-item > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.saved-item a {
+  font-weight: 500;
+}
+
+.item-type {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.remove-button {
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--muted);
+}
+
+.remove-button:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.empty {
+  padding: 24px 0;
+}
+
+.empty p {
+  max-width: 52ch;
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+footer {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+footer button {
+  margin-top: 8px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  main {
+    margin: 24px auto;
+    padding: 0 20px;
+  }
+
+  .page-header {
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+}

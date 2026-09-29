@@ -1,0 +1,8 @@
+node_modules/
+.npm-cache/
+.local-browsers/
+test-results/
+.DS_Store
+*.log
+priority-config.local.json
+

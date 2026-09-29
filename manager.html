@@ -1,0 +1,132 @@
+<!doctype html>
+<!--
+THESIS: A short, deliberate list, not another notification inbox.
+OWN-WORLD: GitHub's system type, neutral surfaces, blue links, and green save action.
+STORY: Add exact links, see what is saved, then open the filtered inbox.
+FIRST VIEWPORT: Title and inbox link; a labeled input; the saved list directly below.
+FORM: A compact list editor extending GitHub's established interface. No concept seed.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Signalbox — GitHub Subscriptions</title>
+    <link rel="stylesheet" href="manager.css">
+    <script src="core.js" defer></script>
+    <script src="summary.js" defer></script>
+    <script src="store.js" defer></script>
+    <script src="summary-client.js" defer></script>
+    <script src="manager.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <div>
+          <span class="field-label">Signalbox</span>
+          <h1>Subscriptions</h1>
+          <p class="intro">Your GitHub inbox, narrowed to pure signal.</p>
+        </div>
+        <a class="inbox-link" href="https://github.com/notifications#subscriptions" target="_blank" rel="noopener noreferrer">Open filtered inbox <span aria-hidden="true">&rarr;</span></a>
+      </header>
+
+      <section id="current-page" class="current-page" aria-label="Current GitHub item" hidden>
+        <div>
+          <span class="field-label">This page</span>
+          <span id="current-label"></span>
+        </div>
+        <button id="save-current" type="button">Add this page</button>
+      </section>
+
+      <form id="add-form">
+        <label for="links">Add GitHub links</label>
+        <textarea id="links" name="links" rows="3" maxlength="100000" placeholder="https://github.com/owner/repo/issues/123" aria-describedby="links-help" spellcheck="false" required></textarea>
+        <p id="links-help" class="help">One link per line. <code>owner/repo#123</code> also works for issues and pull requests.</p>
+        <div class="form-actions">
+          <button id="add-button" class="primary" type="submit" disabled>Add subscriptions</button>
+          <span class="help">Stored only in this Chrome profile.</span>
+        </div>
+      </form>
+
+      <p id="error" class="error" role="alert" hidden></p>
+      <p id="status" class="status" role="status" aria-live="polite">Loading your list...</p>
+
+      <section class="saved-section" aria-labelledby="saved-heading">
+        <div class="list-header">
+          <h2 id="saved-heading">Your list <span id="saved-count" class="count">0</span></h2>
+          <button id="export" class="text-button" type="button" disabled>Export links</button>
+        </div>
+        <label class="sr-only" for="search">Filter saved subscriptions</label>
+        <input id="search" type="search" placeholder="Find a saved item" autocomplete="off" hidden>
+        <ul id="saved-list" class="saved-list" aria-label="Saved subscriptions"></ul>
+        <div id="empty" class="empty" hidden>
+          <h3>No subscriptions yet</h3>
+          <p>Add links above, or use the bookmark button on a GitHub item or notification.</p>
+        </div>
+        <p id="no-results" class="help" hidden>No saved items match this search.</p>
+      </section>
+
+      <section id="priority-rules" class="saved-section" aria-labelledby="priority-rules-heading">
+        <h2 id="priority-rules-heading">Priority filter rules</h2>
+        <p class="help">Configure your organizational contacts and core repositories for the Priority filter. Stored locally in this Chrome profile (never sent externally).</p>
+        <form id="priority-rules-form">
+          <label for="priority-rules-json">Priority contacts &amp; repositories (JSON)</label>
+          <textarea id="priority-rules-json" rows="5" spellcheck="false" placeholder='{"contacts":{"octocat":{"points":30,"tier":1,"role":"Manager"}},"coreRepos":["owner/repo"],"adjacentRepos":[]}'></textarea>
+          <div class="form-actions">
+            <button id="save-priority-rules" type="submit">Save priority rules</button>
+          </div>
+        </form>
+        <p id="priority-rules-error" class="error" role="alert" hidden></p>
+        <p id="priority-rules-status" class="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="summaries" class="saved-section" aria-labelledby="summaries-heading">
+        <h2 id="summaries-heading">Local AI summaries</h2>
+        <p class="help">Summarize the exact linked comment with LM Studio, Ollama, or MLX on this Mac. No cloud service, API key, or model download.</p>
+        <label class="server-label" for="summary-server">Local server</label>
+        <select id="summary-server">
+          <option value="lmstudio">LM Studio - 127.0.0.1:1234</option>
+          <option value="ollama">Ollama - 127.0.0.1:11434</option>
+          <option value="mlx">Local MLX - 127.0.0.1:8080</option>
+        </select>
+        <div class="form-actions">
+          <button id="connect-models" type="button">Connect to local server</button>
+        </div>
+        <form id="summary-form">
+          <label for="summary-model">Local model</label>
+          <select id="summary-model" aria-describedby="summary-help" disabled>
+            <option value="">Connect to list installed models</option>
+          </select>
+          <label class="checkbox-label" for="summary-automatic">
+            <input id="summary-automatic" type="checkbox" disabled>
+            Summarize automatically when I open a notifications view
+          </label>
+          <p id="summary-help" class="help">Fetching comment pages can mark notifications read on GitHub. Automatic summaries are off by default. Otherwise, use Summarize comments in any notifications filter view.</p>
+          <div class="form-actions">
+            <button id="save-summary-settings" type="submit" disabled>Save summary settings</button>
+            <button id="disable-summaries" class="text-button" type="button" hidden>Turn off summaries</button>
+          </div>
+        </form>
+        <p id="summary-error" class="error" role="alert" hidden></p>
+        <p id="summary-status" class="status" role="status" aria-live="polite"></p>
+        <p class="help">AI can miss details. "Needs your response" means this linked comment explicitly asks you to act; a later reply may already have answered it. Open the original to check.</p>
+        <h3>Saved locally</h3>
+        <p class="help">Summaries, short evidence quotes, source metadata, and caught-up markers stay in this Chrome profile, separately for each GitHub account. Full comment text stays in memory. None of this is included in link exports.</p>
+        <p class="help">Up to 200 summaries are kept, with a 30-day reuse limit. Unchanged comments reuse their summary. A saved snapshot shows when its source was checked; use Recheck comment for a fresh comparison. Rechecking may mark the notification read.</p>
+        <p id="local-data-counts" class="help" role="status">Loading saved data...</p>
+        <div class="form-actions">
+          <button id="clear-summary-cache" class="text-button" type="button">Clear saved summaries</button>
+          <button id="clear-review-state" class="text-button" type="button">Reset caught-up state</button>
+        </div>
+        <p class="help">These controls clear that data for all GitHub accounts in this Chrome profile. Subscriptions and model settings stay unchanged.</p>
+        <p id="local-data-error" class="error" role="alert" hidden></p>
+        <p id="local-data-status" class="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <footer>
+        <p>This list filters existing inbox notifications. It does not change GitHub's Watch or Unsubscribe settings, or create new notifications.</p>
+        <button id="open-manager" class="text-button" type="button" hidden>Manage in a full tab</button>
+      </footer>
+    </main>
+  </body>
+</html>
