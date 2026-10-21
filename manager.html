@@ -82,9 +82,10 @@ FORM: A compact list editor extending GitHub's established interface. No concept
 
       <section id="summaries" class="saved-section" aria-labelledby="summaries-heading">
         <h2 id="summaries-heading">Local AI summaries</h2>
-        <p class="help">Summarize the exact linked comment with LM Studio, Ollama, or MLX on this Mac. No cloud service, API key, or model download.</p>
+        <p class="help">Summarize the exact linked comment with Splash, LM Studio, Ollama, or MLX on this Mac. The extension never uses a cloud model or downloads models.</p>
         <label class="server-label" for="summary-server">Local server</label>
         <select id="summary-server">
+          <option value="splash">Splash (default) - 127.0.0.1:8000</option>
           <option value="lmstudio">LM Studio - 127.0.0.1:1234</option>
           <option value="ollama">Ollama - 127.0.0.1:11434</option>
           <option value="mlx">Local MLX - 127.0.0.1:8080</option>

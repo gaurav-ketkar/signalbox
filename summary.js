@@ -8,6 +8,7 @@
   const ORIGIN = "http://127.0.0.1:11434";
   const LM_STUDIO_ORIGIN = "http://127.0.0.1:1234";
   const MLX_ORIGIN = "http://127.0.0.1:8080";
+  const SPLASH_ORIGIN = "http://127.0.0.1:8000";
   const KEV_ORIGIN = "http://127.0.0.1:8009";
   const PERMISSION_ORIGIN = "http://127.0.0.1/*";
   const STORAGE_KEY = "summaries:v1:settings";
@@ -56,8 +57,7 @@
     }
     if (model === "" && allowEmpty) return model;
     const provider = providerForModel(model);
-    const name = provider === "lmstudio" ? model.slice("lmstudio:".length) :
-      provider === "mlx" ? model.slice("mlx:".length) : model;
+    const name = provider === "ollama" ? model : model.slice(provider.length + 1);
     if (!name || model.length > 200 || !MODEL_NAME.test(name)) {
       throw new LocalSummaryError("Choose a valid local model name, at most 200 characters, with no spaces or URL (for example gemma4:12b-it-qat).");
     }
@@ -74,6 +74,7 @@
     if (typeof model !== "string") return "ollama";
     if (model.startsWith("lmstudio:")) return "lmstudio";
     if (model.startsWith("mlx:")) return "mlx";
+    if (model.startsWith("splash:")) return "splash";
     return "ollama";
   }
 
@@ -189,11 +190,11 @@
         ...(contextWindow ? { contextWindow } : {})
       };
     }
-    if (provider === "mlx") {
+    if (provider === "mlx" || provider === "splash") {
       if (!isObject(entry) || entry.object !== "model" || typeof entry.id !== "string" ||
           (entry.loaded !== undefined && typeof entry.loaded !== "boolean") ||
           ["remote_host", "remote_model", "remote", "is_remote"].some((key) => Object.hasOwn(entry, key))) return null;
-      const id = `mlx:${entry.id}`;
+      const id = `${provider}:${entry.id}`;
       try {
         validateModel(id);
       } catch (error) {
@@ -204,7 +205,7 @@
       return {
         id,
         size: Number.MAX_SAFE_INTEGER,
-        loaded: entry.loaded === true,
+        loaded: provider === "splash" || entry.loaded === true,
         ...(contextWindow ? { contextWindow } : {})
       };
     }
@@ -310,6 +311,9 @@
   }
 
   function httpError(status, isChat, provider) {
+    if (provider === "splash") {
+      return new LocalSummaryError(`Local Splash rejected the request (HTTP ${status}). Check that Splash is serving the selected model at ${SPLASH_ORIGIN} and allows this extension's origin, then retry.`);
+    }
     if (provider === "lmstudio") {
       return new LocalSummaryError(`Local LM Studio rejected the request (HTTP ${status}). Check that its local server is running and allows this extension, then retry or choose another installed model.`);
     }
@@ -345,9 +349,9 @@
     signal?.throwIfAborted();
     const isChat = body !== undefined;
     const origin = provider === "lmstudio" ? LM_STUDIO_ORIGIN :
-      provider === "mlx" ? MLX_ORIGIN : ORIGIN;
+      provider === "mlx" ? MLX_ORIGIN : provider === "splash" ? SPLASH_ORIGIN : ORIGIN;
     const server = provider === "lmstudio" ? "LM Studio" :
-      provider === "mlx" ? "MLX server" : "Ollama";
+      provider === "mlx" ? "MLX server" : provider === "splash" ? "Splash" : "Ollama";
     const url = origin + path;
     const controller = new AbortController();
     const onAbort = () => controller.abort(signal.reason);
@@ -400,12 +404,13 @@
   }
 
   async function listModels({ signal, fetchPage = fetch, provider = "ollama" } = {}) {
-    if (!["ollama", "lmstudio", "mlx"].includes(provider)) throw new LocalSummaryError("Choose Ollama, LM Studio, or MLX as the local server.");
-    const path = provider === "lmstudio" ? "/api/v1/models" : provider === "mlx" ? "/v1/models" : "/api/tags";
+    if (!["ollama", "lmstudio", "mlx", "splash"].includes(provider)) throw new LocalSummaryError("Choose Splash, Ollama, LM Studio, or MLX as the local server.");
+    const openAIModels = provider === "mlx" || provider === "splash";
+    const path = provider === "lmstudio" ? "/api/v1/models" : openAIModels ? "/v1/models" : "/api/tags";
     const result = await requestJson(path, { signal, fetchPage, provider });
-    const entries = provider === "mlx" ? result?.data : result?.models;
+    const entries = openAIModels ? result?.data : result?.models;
     if (!isObject(result) || Object.hasOwn(result, "error") || !Array.isArray(entries)) {
-      throw new LocalSummaryError(`The local server returned an invalid model list; expected a ${provider === "mlx" ? "data" : "models"} array. Check the local server and refresh the list.`);
+      throw new LocalSummaryError(`The local server returned an invalid model list; expected a ${openAIModels ? "data" : "models"} array. Check the local server and refresh the list.`);
     }
     const models = new Map();
     for (const entry of entries) {
@@ -534,12 +539,12 @@
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: JSON.stringify({ title, author, viewer, directRequestPossible, text, truncated }) }
     ];
-    const result = await requestJson(["lmstudio", "mlx"].includes(provider) ? "/v1/chat/completions" : "/api/chat", {
+    const result = await requestJson(["lmstudio", "mlx", "splash"].includes(provider) ? "/v1/chat/completions" : "/api/chat", {
       signal,
       fetchPage,
       provider,
-      body: provider === "lmstudio" ? {
-        model: model.slice("lmstudio:".length),
+      body: provider === "lmstudio" || provider === "splash" ? {
+        model: model.slice(provider.length + 1),
         stream: false,
         store: false,
         temperature: 0,
@@ -567,11 +572,11 @@
       }
     });
     signal?.throwIfAborted();
-    if (provider === "lmstudio" || provider === "mlx") {
+    if (provider === "lmstudio" || provider === "mlx" || provider === "splash") {
       const choice = result?.choices?.[0];
       if (!isObject(result) || Object.hasOwn(result, "error") || !Array.isArray(result.choices) ||
           result.choices.length !== 1 || !isObject(choice) || !choice.finish_reason) {
-        throw new LocalSummaryError(`${provider === "mlx" ? "MLX server" : "LM Studio"} returned an incomplete response. Retry or choose another local model.`);
+        throw new LocalSummaryError(`${provider === "mlx" ? "MLX server" : provider === "splash" ? "Splash" : "LM Studio"} returned an incomplete response. Retry or choose another local model.`);
       }
       return readSummary({ done: true, done_reason: choice.finish_reason, message: choice.message }, source);
     }
@@ -692,7 +697,7 @@
   }
 
   return {
-    ORIGIN, LM_STUDIO_ORIGIN, MLX_ORIGIN, KEV_ORIGIN, PERMISSION_ORIGIN, STORAGE_KEY, SUMMARY_VERSION,
+    ORIGIN, LM_STUDIO_ORIGIN, MLX_ORIGIN, SPLASH_ORIGIN, KEV_ORIGIN, PERMISSION_ORIGIN, STORAGE_KEY, SUMMARY_VERSION,
     DEFAULT_CONTEXT_WINDOW, MAX_PARALLEL_SUMMARIES, DEFAULT_SETTINGS,
     providerForModel, validateSettings, validateResult, recommendedModel,
     contextWindowForModel, estimateTokens, maxParallelSummaries, listModels, summarize, triageWithKev

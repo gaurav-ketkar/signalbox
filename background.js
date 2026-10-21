@@ -195,7 +195,7 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     received = true;
     if (!["models", "summarize", "triage", "kev-status"].includes(message?.type) ||
-        (message.type === "models" && message.provider !== undefined && !["ollama", "lmstudio", "mlx"].includes(message.provider)) ||
+        (message.type === "models" && message.provider !== undefined && !["ollama", "lmstudio", "mlx", "splash"].includes(message.provider)) ||
         (["summarize", "triage", "kev-status"].includes(message.type) && page !== "notifications")) {
       send({ type: "error", message: "Open AI settings or GitHub notifications to use local summaries." });
       return;

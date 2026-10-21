@@ -35,7 +35,7 @@ instead of treating every GitHub notification as equally important.
 - Create or name the local filter through GitHub's native add-filter dialog.
 - Preserve notification reasons and context. Preview an exact linked comment
   on request when GitHub includes it in the item page.
-- Summarize that exact comment with an installed local LM Studio, Ollama, or MLX model across all GitHub notification filter views (not just Subscriptions). Keep
+- Summarize that exact comment with Splash by default, or an installed local LM Studio, Ollama, or MLX model across all GitHub notification filter views (not just Subscriptions). Preserve saved provider choices. Keep
   summaries beside the notification, not behind the preview.
 - Schedule local summaries in parallel up to the active model's context window token budget.
 - Distinguish explicit requests to the signed-in user from FYI and unclear recipients.
@@ -65,7 +65,7 @@ choices, not additional user requirements:
 - Fetch comment previews only after expansion. Keep the original notification
   link and never substitute a newer comment for a missing linked comment.
 - Render previews as text, with no scripts, remote images, or stored comment content.
-- Use only the two fixed loopback LM Studio/Ollama endpoints. Do not send GitHub content to
+- Use only the fixed loopback Splash/LM Studio/Ollama/MLX endpoints. Do not send GitHub content to
   cloud models, download models, or forward GitHub cookies to the model server.
 - Keep automatic summaries off until explicitly enabled. Warn that fetching
   source comments may mark notifications read, and check model availability first

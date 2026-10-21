@@ -311,8 +311,8 @@
         throw new Error("Connect to your local server and choose an available model before saving.");
       }
       const provider = summary.providerForModel(model);
-      if (!["ollama", "lmstudio", "mlx"].includes(provider)) {
-        throw new Error("Unsupported provider. Choose Ollama, LM Studio, or MLX.");
+      if (!["ollama", "lmstudio", "mlx", "splash"].includes(provider)) {
+        throw new Error("Unsupported provider. Choose Splash, Ollama, LM Studio, or MLX.");
       }
       summarySettings = await store.saveSummarySettings({
         model, automatic: byId("summary-automatic").checked

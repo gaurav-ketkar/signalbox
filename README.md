@@ -2,7 +2,7 @@
 
 > **Turn GitHub's notification firehose into pure signal—100% locally on your Mac.**
 
-Signalbox is a local Chrome extension that adds **Priority** and **Subscriptions** filters to GitHub's notifications sidebar, summarizes threads inline across every filter view using local AI (MLX, LM Studio, or Ollama), and lets you sweep noisy notifications in one click.
+Signalbox is a local Chrome extension that adds **Priority** and **Subscriptions** filters to GitHub's notifications sidebar, summarizes threads inline across every filter view using local AI (Splash, MLX, LM Studio, or Ollama), and lets you sweep noisy notifications in one click.
 
 It reads GitHub's page HTML, including later pages. No GitHub token, cloud API key, or build step is needed.
 
@@ -158,9 +158,9 @@ you expand it. It never calls Mark read, Done, Subscribe, or Unsubscribe APIs.
 
 ## At-a-glance local AI summaries
 
-Summaries use an installed **LM Studio**, **Ollama**, or **Local MLX** model on your machine. GitHub comments are
+Summaries default to **Splash**, with **LM Studio**, **Ollama**, and **Local MLX** also supported on your machine. Existing saved provider choices are preserved. GitHub comments are
 never sent to a cloud model, and the extension does not download models.
-LM Studio uses `http://127.0.0.1:1234`, Ollama uses `http://127.0.0.1:11434`, and Local MLX uses `http://127.0.0.1:8080` (with optional fast triage via Kev on `http://127.0.0.1:8009`).
+Splash uses `http://127.0.0.1:8000`, LM Studio uses `http://127.0.0.1:1234`, Ollama uses `http://127.0.0.1:11434`, and Local MLX uses `http://127.0.0.1:8080` (with optional fast triage via Kev on `http://127.0.0.1:8009`).
 Only these fixed loopback endpoints are supported.
 
 1. Choose **Set up local summaries** in the filtered inbox, or open the extension's
@@ -168,11 +168,31 @@ Only these fixed loopback endpoints are supported.
 2. Choose your **Local server**, then **Connect to local server**.
    Only installed local text models are listed.
    Cloud-backed and embedding models are excluded.
-3. Choose a model and **Save summary settings**. LM Studio and MLX prefer an already
+3. Choose a model and **Save summary settings**. Splash lists its served model; LM Studio and MLX prefer an already
    loaded model. Ollama suggests `gemma4:12b-it-qat` when installed.
    Otherwise the smallest supported local model is selected.
 4. Choose **Summarize comments** in Subscriptions or any GitHub notifications filter view to summarize the
    linked comments, or **Summarize** on one row.
+
+### Splash setup
+
+Install [Splash](https://github.com/incoai/splash) separately. In `chrome://extensions`,
+enable Developer mode and copy Signalbox's extension ID. Start Splash with that
+exact extension origin allowed (replace `YOUR_EXTENSION_ID`):
+
+```bash
+HF_HOME="$HOME/Models/huggingface" splash serve \
+  --model mlx-community/Qwen3.8-27B-4bit \
+  --host 127.0.0.1 --port 8000 \
+  --allowed-origin chrome-extension://YOUR_EXTENSION_ID
+```
+
+Use your existing Hugging Face cache path if different. Cached weights are reused;
+Splash may download missing model files and its matching draft model. Keep the
+server running, select **Splash**, connect, choose its model, and save.
+Allow only the exact extension origin, not `*`. If Chrome assigns a different
+extension ID after moving the source folder, update the server's allowlist.
+Automatic summaries remain off until you explicitly enable them.
 
 Each summary names the people involved and uses short, active sentences. It
 appears in the wider activity column with one of three local-AI labels:
@@ -350,9 +370,18 @@ npm run test:local
 This separate test uses a temporary Chrome profile and checks the exact-comment
 summary, named actors, explicit and ambiguous requests, other recipients, resolved
 and quoted requests, partial sources, negation, a no-action update, and an instruction
-embedded in source text. It defaults to LM Studio and needs a running server
+embedded in source text. It defaults to Splash and needs a running server
 and an installed local model; it does not install one. Set `GNS_LOCAL_MODEL` to
-an Ollama model name, or `lmstudio:<model-key>` for an LM Studio model.
+an Ollama model name, `splash:<model-id>`, `mlx:<model-id>`, or
+`lmstudio:<model-key>` for an LM Studio model. Splash must allow the test
+extension's origin as described above.
+
+### Version numbers
+
+Keep `manifest.json`, `package.json`, and `package-lock.json` versions in sync.
+Use a patch bump for backward-compatible fixes, a minor bump for new
+backward-compatible features, and a major bump for breaking changes. Splash
+support is a new feature, so this release is **1.4.0**.
 
 Screenshots are written to the ignored `test-results/` folder. Test profiles are
 removed after the run.
@@ -378,4 +407,3 @@ By default, the **Priority** filter (`https://github.com/notifications#priority`
 ## Contributing & License
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture and privacy guardrails. Licensed under the [Apache-2.0 License](LICENSE).
-

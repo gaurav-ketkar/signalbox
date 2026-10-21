@@ -43,7 +43,8 @@ test("summarizes synthetic comments through the installed extension and a real l
     await until(() => manager.locator("#connect-models").isEnabled(), "Settings did not load", 10000);
     if (process.env.GNS_LOCAL_MODEL) {
       const provider = process.env.GNS_LOCAL_MODEL.startsWith("lmstudio:") ? "lmstudio" :
-        process.env.GNS_LOCAL_MODEL.startsWith("mlx:") ? "mlx" : "ollama";
+        process.env.GNS_LOCAL_MODEL.startsWith("mlx:") ? "mlx" :
+        process.env.GNS_LOCAL_MODEL.startsWith("splash:") ? "splash" : "ollama";
       await manager.locator("#summary-server").selectOption(provider);
     }
     await manager.locator("#connect-models").click();
@@ -81,6 +82,7 @@ test("summarizes synthetic comments through the installed extension and a real l
     assert.ok(result.summary.length <= 400);
     assert.doesNotMatch(JSON.stringify(result), /older|newer comment/);
     console.log(JSON.stringify({ model, elapsedMs: Date.now() - started, case: "exact linked comment", ...result }));
+    await page.locator(".gns-more").click();
     await page.locator(".gns-preview > summary").click();
     await until(async () => (await page.locator(".gns-preview-text").textContent()).includes("keyboard fix"), "Original comment was not retained", 10000);
     await page.screenshot({ path: path.join(results, "summaries-local-model.png"), fullPage: true });
@@ -147,7 +149,10 @@ test("summarizes synthetic comments through the installed extension and a real l
           assert.match(output.action, /review/i);
           assert.match(output.summary, /conditional|may|if|tentative/i);
         }
-        if (input.title === "Partial source") assert.match(output.summary, /partial|shorten|truncat|incomplete/i);
+        if (input.title === "Partial source") {
+          assert.match(output.summary, /not approved/i);
+          assert.doesNotMatch(output.summary, /partial|shorten|truncat|incomplete/i);
+        }
         if (["Mention without an ask", "Completed request", "Quoted old plan"].includes(input.title)) assert.equal(output.action, "");
       });
     }

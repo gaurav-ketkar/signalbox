@@ -63,6 +63,53 @@ const mlxModel = (id = "mlx-community/Qwen3.6-35B-A3B-4bit", overrides = {}) => 
 });
 const mlxModels = (models = [mlxModel()]) => jsonResponse({ object: "list", data: models });
 
+test("Splash discovers its resident model and preserves its reported context", async () => {
+  const http = fakeHttp([mlxModels([
+    mlxModel("mlx-community/Qwen3.8-27B-4bit", { loaded: undefined, context_length: 262144 }),
+    mlxModel("remote/model", { remote_host: "https://external.invalid" }),
+    mlxModel("embedding-model")
+  ])]);
+  const models = await summary.listModels({ ...http, provider: "splash" });
+  assert.deepEqual(models, [{
+    id: "splash:mlx-community/Qwen3.8-27B-4bit",
+    size: Number.MAX_SAFE_INTEGER, loaded: true, contextWindow: 262144
+  }]);
+  assert.equal(summary.recommendedModel(models), models[0].id);
+  assert.equal(summary.providerForModel(models[0].id), "splash");
+  assert.equal(http.calls[0].url, "http://127.0.0.1:8000/v1/models");
+  assert.deepEqual(summary.validateSettings({ model: models[0].id, automatic: true }),
+    { model: models[0].id, automatic: true });
+});
+
+test("Splash uses strict local structured output without reasoning or storage", async () => {
+  const model = "splash:mlx-community/Qwen3.8-27B-4bit";
+  const http = fakeHttp([mlxModels([mlxModel(model.slice(7))]), lmResponse()]);
+  assert.deepEqual(await summary.summarize({ ...SOURCE, model }, http), OUTPUT);
+  const body = JSON.parse(http.calls[1].options.body);
+  assert.equal(body.model, model.slice(7));
+  assert.equal(body.reasoning_effort, "none");
+  assert.equal(body.store, false);
+  assert.equal(body.stream, false);
+  assert.equal(body.response_format.json_schema.strict, true);
+  assert.equal(body.max_tokens, 500);
+  assert.ok(http.calls.every((call) => call.url.startsWith("http://127.0.0.1:8000/")));
+});
+
+test("Splash failures never switch endpoints or expose incomplete output", async () => {
+  for (const response of [
+    jsonResponse({}, { status: 403 }),
+    jsonResponse({}, { status: 503 }),
+    jsonResponse({ choices: [] }),
+    jsonResponse({ choices: [{ finish_reason: "length", message: { role: "assistant", content: "{}" } }] }),
+    lmResponse(OUTPUT, { tool_calls: [{ function: { name: "unsafe" } }] })
+  ]) {
+    const http = fakeHttp([mlxModels(), response]);
+    await assert.rejects(summary.summarize({ ...SOURCE, model: "splash:mlx-community/Qwen3.6-35B-A3B-4bit" }, http));
+    assert.equal(http.calls.length, 2);
+    assert.ok(http.calls.every((call) => call.url.startsWith("http://127.0.0.1:8000/")));
+  }
+});
+
 test("LM Studio lists only local model files and prefers an already loaded model", async () => {
   const http = fakeHttp([tags([
     lmModel(),
@@ -159,7 +206,7 @@ test("MLX uses its OpenAI-compatible chat endpoint and selected model id", async
 
 test("invalid local server choices cannot become arbitrary endpoints", async () => {
   for (const provider of ["https://evil.invalid", "openai", null, ""]) {
-    await assert.rejects(summary.listModels({ provider, fetchPage: () => assert.fail("Invalid provider made a request") }), /Choose Ollama, LM Studio, or MLX/);
+    await assert.rejects(summary.listModels({ provider, fetchPage: () => assert.fail("Invalid provider made a request") }), /Choose Splash, Ollama, LM Studio, or MLX/);
   }
 });
 
@@ -167,7 +214,7 @@ test("summary exposes the exact CommonJS and browser-global API without dependen
   assert.equal(globalThis.GitHubSubscriptionSummary, summary);
   assert.deepEqual(Object.keys(summary).sort(), [
     "DEFAULT_CONTEXT_WINDOW", "DEFAULT_SETTINGS", "KEV_ORIGIN", "MAX_PARALLEL_SUMMARIES",
-    "ORIGIN", "LM_STUDIO_ORIGIN", "MLX_ORIGIN", "PERMISSION_ORIGIN", "STORAGE_KEY", "SUMMARY_VERSION",
+    "ORIGIN", "LM_STUDIO_ORIGIN", "MLX_ORIGIN", "SPLASH_ORIGIN", "PERMISSION_ORIGIN", "STORAGE_KEY", "SUMMARY_VERSION",
     "contextWindowForModel", "estimateTokens", "listModels", "maxParallelSummaries",
     "providerForModel", "recommendedModel", "summarize", "triageWithKev", "validateSettings", "validateResult"
   ].sort());

@@ -232,9 +232,10 @@ beforeEach(async () => {
     };
     globalThis.fetch = async (input, options = {}) => {
       const url = String(input);
-      if (!/^http:\/\/127\.0\.0\.1:(11434|1234)\//.test(url)) return globalThis.gnsOriginalFetch(input, options);
+      if (!/^http:\/\/127\.0\.0\.1:(11434|1234|8000)\//.test(url)) return globalThis.gnsOriginalFetch(input, options);
       const state = globalThis.gnsTestAI;
       const lmStudio = url.startsWith("http://127.0.0.1:1234/");
+      const splash = url.startsWith("http://127.0.0.1:8000/");
       const chat = url.endsWith("/api/chat") || url.endsWith("/v1/chat/completions");
       state.calls.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null });
       options.signal?.throwIfAborted();
@@ -259,9 +260,10 @@ beforeEach(async () => {
         }
       }
       const message = { role: "assistant", content: state.content ?? JSON.stringify(state.result) };
-      return new Response(JSON.stringify(chat ? (lmStudio ?
+      return new Response(JSON.stringify(chat ? (lmStudio || splash ?
         { choices: [{ finish_reason: "stop", message }] } :
         { done: true, done_reason: "stop", message }) :
+        splash ? { data: [{ id: "mlx-community/Qwen3.8-27B-4bit", object: "model", context_length: 262144 }] } :
         { models: lmStudio ? state.lmModels : state.models }), {
         status: chat ? state.chatStatus : state.tagsStatus,
         headers: { "Content-Type": "application/json" }
@@ -1040,7 +1042,7 @@ test("falls back to summarizing available issue and timeline content when an exa
 test("LM Studio setup selects its own local endpoint and never silently switches providers", async () => {
   await seed();
   const manager = await openManager();
-  assert.equal(await manager.locator("#summary-server").inputValue(), "lmstudio");
+  await manager.locator("#summary-server").selectOption("lmstudio");
   await manager.locator("#connect-models").click();
   await eventually(async () => manager.locator("#save-summary-settings").isEnabled(), "LM Studio models did not load");
   assert.equal(await manager.locator("#summary-model").inputValue(), "lmstudio:prism-ml/bonsai-27b");
@@ -1058,6 +1060,28 @@ test("LM Studio setup selects its own local endpoint and never silently switches
   assert.equal(await manager.locator("#save-summary-settings").isEnabled(), false);
   const saved = await worker.evaluate(async (key) => chrome.storage.local.get(key), summaries.STORAGE_KEY);
   assert.equal(saved[summaries.STORAGE_KEY].model, "lmstudio:prism-ml/bonsai-27b");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("Splash is the setup default and saved provider choices are preserved", async () => {
+  await seed();
+  const manager = await openManager();
+  assert.equal(await manager.locator("#summary-server").inputValue(), "splash");
+  await manager.locator("#connect-models").click();
+  await eventually(async () => manager.locator("#save-summary-settings").isEnabled(), "Splash models did not load");
+  assert.equal(await manager.locator("#summary-model").inputValue(), "splash:mlx-community/Qwen3.8-27B-4bit");
+  await manager.locator("#summary-automatic").check();
+  await manager.locator("#save-summary-settings").click();
+  await eventually(async () => (await manager.locator("#summary-status").textContent()).startsWith("Saved"), "Splash settings were not saved");
+  await openFilter();
+  await complete();
+  await summarized(4);
+  const calls = (await aiState()).calls;
+  assert.ok(calls.every((call) => call.url.startsWith("http://127.0.0.1:8000/")));
+  assert.equal(calls.filter((call) => call.url.endsWith("/v1/chat/completions")).length, 4);
+  await manager.reload();
+  await eventually(async () => manager.locator("#connect-models").isEnabled(), "Saved settings did not load");
+  assert.equal(await manager.locator("#summary-server").inputValue(), "splash");
   assert.deepEqual(pageErrors, []);
 });
 
