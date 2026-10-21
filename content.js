@@ -921,7 +921,7 @@
     const summarize = button("Summarize comments", "gns-button", () => {
       if (!view) return;
       view.summariesPaused = false;
-      for (const tools of view.commentTools.values()) {
+      for (const tools of [...view.commentTools.values()].sort((left, right) => right.priority() - left.priority())) {
         if (tools.canStart()) tools.startSummary();
       }
     });
@@ -1058,7 +1058,7 @@
     const summarize = button("Summarize comments", "gns-button", () => {
       if (!nativeView) return;
       nativeView.summariesPaused = false;
-      for (const tools of nativeView.commentTools.values()) {
+      for (const tools of [...nativeView.commentTools.values()].sort((left, right) => right.priority() - left.priority())) {
         if (tools.canStart()) tools.startSummary();
       }
     });
@@ -1209,6 +1209,15 @@
     });
   }
 
+  function scheduleSummaries(current) {
+    if (current.summaryDrainScheduled) return;
+    current.summaryDrainScheduled = true;
+    queueMicrotask(() => {
+      current.summaryDrainScheduled = false;
+      drainSummaries(current);
+    });
+  }
+
   function drainSummaries(current) {
     if (view !== current && nativeView !== current) return;
     current.summaryQueue.sort((left, right) => (right.priority || 0) - (left.priority || 0));
@@ -1231,7 +1240,7 @@
         current.activeSummaries = Math.max(0, current.activeSummaries - 1);
         current.activeTokens = Math.max(0, current.activeTokens - tokens);
         if (view === current || nativeView === current) {
-          drainSummaries(current);
+          scheduleSummaries(current);
           renderSummaryControls(current);
         }
       });
@@ -1744,7 +1753,7 @@
           }
         }
       } });
-      drainSummaries(current);
+      scheduleSummaries(current);
     }
 
     function stopSummary(failedMessage = "") {
@@ -1810,6 +1819,7 @@
         if (summarySettings.automatic) startSummary(true);
       },
       pending: () => ["queued", "running"].includes(phase),
+      priority: () => computeItemPriority(current, item).score,
       finished: () => phase === "done",
       canStart: () => !!target && !caughtUp(current, item) && !["loading", "queued", "running", "done", "unavailable"].includes(phase),
       cancel: () => {

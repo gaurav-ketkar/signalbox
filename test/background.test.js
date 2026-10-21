@@ -64,7 +64,7 @@ function harness() {
     list: async () => state.subscribed ? [{ key: "acme/console#42" }] : []
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../background.js"), "utf8"), {
-    chrome, console, AbortController, importScripts() {},
+    chrome, console, AbortController, setTimeout, importScripts() {},
     GitHubSubscriptions: core, GitHubSubscriptionSummary: summary,
     GitHubSubscriptionStore: {
       ...storeApi,
@@ -152,7 +152,7 @@ test("checks host access and current model before inference and allows summarizi
     h.state[key] = value;
     const port = h.connect();
     port.onMessage.emit(input);
-    await tick();
+    await waitFor(() => port.messages.some((message) => message.type === "error"));
     assert.equal(port.messages.at(-1).type, "error");
     assert.deepEqual(h.state.calls, []);
     h.close();
@@ -194,6 +194,35 @@ test("processes notifications in parallel up to the LLM context window limit and
   await waitFor(() => ports[51].messages.some((message) => message.type === "result"));
   assert.equal(ports[51].messages.at(-1).type, "result");
   assert.equal(ports[0].messages.some((message) => message.type === "result"), false);
+  h.close();
+});
+
+test("starts each batch in descending priority with stable ties and parallel capacity", async () => {
+  const h = harness();
+  h.state.hold = true;
+  const priorities = [1, 90, 40, 90, 10];
+  const ports = priorities.map(() => h.connect());
+  ports.forEach((port, index) => port.onMessage.emit({
+    ...input,
+    title: `Priority item ${index}`,
+    href: `https://github.com/acme/console/pull/${index + 1}#issuecomment-123`,
+    priority: priorities[index],
+    tokens: 10000,
+    contextWindow: 20000
+  }));
+  await waitFor(() => h.state.active === 2);
+  assert.deepEqual(h.state.calls.map((call) => call.title), ["Priority item 1", "Priority item 3"]);
+  h.state.waits[0]();
+  await waitFor(() => h.state.calls.length === 3);
+  assert.equal(h.state.calls[2].title, "Priority item 2");
+  h.state.waits[1]();
+  await waitFor(() => h.state.calls.length === 4);
+  assert.equal(h.state.calls[3].title, "Priority item 4");
+  h.state.waits[2]();
+  await waitFor(() => h.state.calls.length === 5);
+  assert.equal(h.state.calls[4].title, "Priority item 0");
+  for (const resolve of h.state.waits) resolve();
+  await waitFor(() => h.state.active === 0);
   h.close();
 });
 

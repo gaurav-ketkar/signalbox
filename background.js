@@ -9,6 +9,16 @@ const store = storeApi.createStore(chrome.storage.local);
 const MAX_QUEUED_JOBS = 128;
 const jobs = new Set();
 const queue = [];
+let drainScheduled = false;
+
+function scheduleDrain() {
+  if (drainScheduled) return;
+  drainScheduled = true;
+  setTimeout(() => {
+    drainScheduled = false;
+    drain();
+  }, 0);
+}
 const knownContextWindows = new Map();
 let activeJobs = 0;
 let activeTokens = 0;
@@ -340,7 +350,7 @@ chrome.runtime.onConnect.addListener((port) => {
     else {
       send({ type: "progress", message: activeJobs > 0 ? "Summarizing in parallel..." : "Starting local summary..." });
       queue.push(job);
-      drain();
+      scheduleDrain();
     }
   });
 });

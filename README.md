@@ -174,6 +174,11 @@ Only these fixed loopback endpoints are supported.
 4. Choose **Summarize comments** in Subscriptions or any GitHub notifications filter view to summarize the
    linked comments, or **Summarize** on one row.
 
+Summary batches start the highest-priority waiting notifications first, using
+the same priority scores as the Priority filter. Equal scores keep their queue
+order. Processing remains parallel, so summaries can finish in a different order.
+Already-running work is not interrupted when a higher-priority notification arrives.
+
 ### Splash setup
 
 Install [Splash](https://github.com/incoai/splash) separately. In `chrome://extensions`,

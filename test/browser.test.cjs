@@ -1023,6 +1023,31 @@ test("configures a local model and saves summaries without storing full source c
   assert.deepEqual(pageErrors, []);
 });
 
+test("manual summary batches start higher-priority notifications before earlier low-priority rows", async () => {
+  await seed();
+  await enableSummaries();
+  const dateTime = new Date().toISOString();
+  routeState.rows = [
+    { ...fixture.pages[0][0], reason: "subscribed", reasonTitle: "You are subscribed to this thread", dateTime },
+    { ...fixture.pages[0][2], reason: "mention", icon: "octicon-issue-opened", dateTime }
+  ];
+  routeState.next = null;
+  await aiState({ delay: 150 });
+  await openFilter();
+  await complete();
+  assert.deepEqual(await page.locator(".gns-result-title").allTextContents(), [
+    "Tighten the release checklist", "Keep keyboard focus after saving"
+  ]);
+  await page.getByRole("button", { name: "Summarize comments", exact: true }).click();
+  await summarized(2);
+  const requests = previewRequests();
+  assert.equal(requests.length, 2);
+  assert.match(requests[0].url, /\/pull\/42/);
+  assert.match(requests[1].url, /\/issues\/11/);
+  assert.ok((await aiState()).peak >= 2, "Priority scheduling must preserve parallel processing");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("falls back to summarizing available issue and timeline content when an exact linked comment is missing", async () => {
   await seed();
   await enableSummaries();
