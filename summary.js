@@ -614,7 +614,7 @@
     const controller = new AbortController();
     const onAbort = () => controller.abort(signal.reason);
     signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(new DOMException("Kev decision model timed out", "TimeoutError")), 4000);
+    const timer = setTimeout(() => controller.abort(new DOMException("Kev decision model timed out", "TimeoutError")), 25000);
     let response;
     try {
       const url = `${origin}/v1/systemone`;
