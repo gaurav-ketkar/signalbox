@@ -25,14 +25,41 @@
   let view = null;
   let nativeView = null;
   const SCAN_CACHE_PREFIX = "scan-cache:v1:";
+  const TODAY_BRIEFING_PREFIX = "today-briefing:v1:";
   const SCAN_CACHE_MS = 10 * 60 * 1000;
   const PRIORITY_CACHE_MS = 4 * 60 * 60 * 1000;
   const memorySummaries = new Map();
   const memoryBriefings = new Map();
+  const checkedInThisTab = new Set();
   let scheduled = false;
 
   function memorySummaryKey(viewer, model, itemKey) {
     return viewer && model && itemKey ? `${viewer}|${model}|${itemKey}` : "";
+  }
+
+  function tabCheckKey(viewer, model, itemKey, activity) {
+    return `${viewer || "anon"}|${model || ""}|${itemKey || ""}|${activity || ""}`;
+  }
+
+  function todayBriefingStorageKey(viewer) {
+    return `${TODAY_BRIEFING_PREFIX}${viewer || "default"}`;
+  }
+
+  async function preloadMemorySummaries() {
+    try {
+      const all = await chrome.storage.local.get(null);
+      const prefix = storeApi.CACHE_PREFIX;
+      for (const [storageKey, record] of Object.entries(all)) {
+        if (!storageKey.startsWith(prefix) || !record?.viewer || !record?.model || !record?.href) continue;
+        const itemKey = (core.summaryTarget || core.commentTarget)(record.href)?.key;
+        const memKey = memorySummaryKey(record.viewer, record.model, itemKey);
+        if (memKey && !memorySummaries.has(memKey)) {
+          memorySummaries.set(memKey, record);
+        }
+      }
+    } catch {
+      // Best-effort preload into RAM.
+    }
   }
 
   function sameLocalDay(first, second) {
@@ -433,7 +460,10 @@
       const stoppedAutomatic = summarySettings.automatic && !saved.automatic;
       summarySettings = saved;
       summarySettingsError = "";
-      if (modelChanged) memorySummaries.clear();
+      if (modelChanged) {
+        memorySummaries.clear();
+        checkedInThisTab.clear();
+      }
       for (const current of [view, nativeView]) {
         if (!current) continue;
         current.modelCheckPromise = null;
@@ -1720,10 +1750,15 @@
       const model = summarySettings.model;
       const memKey = memorySummaryKey(current.viewer, model, item.key);
       const activity = storeApi.activityToken(item);
+      const visitKey = tabCheckKey(current.viewer, model, item.key, activity);
+      if (checkedInThisTab.has(visitKey)) {
+        automaticAttempted = true;
+      }
       const memRecord = memKey ? memorySummaries.get(memKey) : null;
-      if (memRecord && memRecord.activity && memRecord.activity === activity) {
+      if (memRecord && (!activity || !memRecord.activity || memRecord.activity === activity)) {
         cached = memRecord;
         automaticAttempted = true;
+        checkedInThisTab.add(visitKey);
         clearSummary();
         showSummary(memRecord, false);
         paintSummary();
@@ -1748,17 +1783,26 @@
           setText(metadata, "");
           setText(status, "The saved summary changed. Expand to reload its exact source.");
         }
+        const currentActivity = storeApi.activityToken(item);
+        const matchesActivity = record && (!currentActivity || !record.activity || record.activity === currentActivity);
         cached = record;
         if (memKey) {
-          if (record) memorySummaries.set(memKey, record);
-          else memorySummaries.delete(memKey);
+          if (record && matchesActivity) memorySummaries.set(memKey, record);
+          else if (!record) memorySummaries.delete(memKey);
         }
         clearSummary();
         setText(aiStatus, "");
-        if (record && record.activity && record.activity === storeApi.activityToken(item)) showSummary(record, false);
-        else phase = "idle";
+        if (matchesActivity) {
+          showSummary(record, false);
+          if (current.isNative) {
+            automaticAttempted = true;
+            checkedInThisTab.add(visitKey);
+          }
+        } else {
+          phase = "idle";
+        }
         paintSummary();
-        if (allowAutomatic && summarySettings.automatic && current.reviewsReady && !caughtUp(current, item)) {
+        if (allowAutomatic && summarySettings.automatic && current.reviewsReady && !caughtUp(current, item) && !automaticAttempted) {
           startSummary(true);
         }
       } catch (error) {
@@ -1773,9 +1817,11 @@
     function startSummary(automatic = false) {
       if (!target || !summarySettings.model || summarySettingsError ||
           ["loading", "queued", "running", "unavailable"].includes(phase) || lifetime.signal.aborted) return;
+      const visitKey = tabCheckKey(current.viewer, summarySettings.model, item.key, storeApi.activityToken(item));
       if (automatic && (!["idle", "done"].includes(phase) || current.summariesPaused ||
-          !current.reviewsReady || caughtUp(current, item) || automaticAttempted)) return;
+          !current.reviewsReady || caughtUp(current, item) || automaticAttempted || checkedInThisTab.has(visitKey))) return;
       automaticAttempted = true;
+      checkedInThisTab.add(visitKey);
       const recheck = phase === "done";
       const controller = new AbortController();
       const signal = AbortSignal.any([controller.signal, lifetime.signal, current.previewController.signal]);
@@ -1850,7 +1896,8 @@
           signal.throwIfAborted();
           cached = record.persisted ? record : null;
           const memKey = memorySummaryKey(current.viewer, model, item.key);
-          if (memKey && cached) memorySummaries.set(memKey, cached);
+          if (memKey) memorySummaries.set(memKey, record);
+          checkedInThisTab.add(tabCheckKey(current.viewer, model, item.key, storeApi.activityToken(item)));
           showSummary(record, true);
           if (details.open) void loadPreview();
         } catch (error) {
@@ -1906,8 +1953,17 @@
       const change = current.viewer ? changes[storeApi.cacheKey(current.viewer, item.key)] : null;
       if (!reset && (!change || summaryRequest)) return;
       const memKey = memorySummaryKey(current.viewer, summarySettings.model, item.key);
-      if (reset) memorySummaries.clear();
-      else if (memKey) memorySummaries.delete(memKey);
+      if (reset) {
+        memorySummaries.clear();
+        checkedInThisTab.clear();
+      } else if (!change.newValue) {
+        if (memKey) memorySummaries.delete(memKey);
+      } else {
+        if (memKey) memorySummaries.set(memKey, change.newValue);
+        if (cached && cached.fingerprint === change.newValue.fingerprint && phase === "done") {
+          return;
+        }
+      }
       if (reset || !change.newValue) {
         ++cacheVersion;
         stopSummary();
@@ -2158,22 +2214,84 @@
     return row;
   }
 
+  function renderSavedTodayBriefing(current, saved) {
+    current.briefingResult = saved;
+    current.briefingStatus.hidden = true;
+    current.briefingText.hidden = false;
+    setText(current.briefingText, saved.briefing);
+    current.briefingMeta.hidden = false;
+    const wordCount = saved.briefing.trim().split(/\s+/).filter(Boolean).length;
+    const timeLabel = saved.generatedAt ?
+      new Date(saved.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+    const countLabel = saved.itemCount ?
+      `Synthesized from ${saved.itemCount} P1 ${saved.itemCount === 1 ? "notification" : "notifications"}` :
+      "Saved for today";
+    setText(current.briefingMeta, [
+      countLabel,
+      timeLabel ? `saved today at ${timeLabel}` : "",
+      `${wordCount} words`,
+      `Local AI (${saved.model || summarySettings.model})`
+    ].filter(Boolean).join(" · "));
+    current.briefingRegenerate.hidden = false;
+  }
+
+  async function loadSavedTodayBriefing(viewer, model) {
+    const storageKey = todayBriefingStorageKey(viewer);
+    const now = Date.now();
+    const mem = memoryBriefings.get(storageKey);
+    if (mem && mem.model === model && sameLocalDay(mem.generatedAt, now)) {
+      return mem;
+    }
+    try {
+      const stored = (await chrome.storage.local.get(storageKey))?.[storageKey];
+      if (stored && typeof stored.briefing === "string" && stored.briefing.trim() &&
+          stored.model === model && Number.isFinite(stored.generatedAt) && sameLocalDay(stored.generatedAt, now)) {
+        memoryBriefings.set(storageKey, stored);
+        return stored;
+      }
+    } catch {
+      // Ignore storage read failure and fall back to fresh generation.
+    }
+    return null;
+  }
+
+  async function saveTodayBriefingForDay(viewer, record) {
+    const storageKey = todayBriefingStorageKey(viewer);
+    memoryBriefings.set(storageKey, record);
+    try {
+      await chrome.storage.local.set({ [storageKey]: record });
+    } catch {
+      // In-memory cache still holds today's briefing if storage write fails.
+    }
+  }
+
   async function updateTodayBriefing(current, force = false) {
     if (!current || current.mode !== "today" || view !== current || !current.briefingCard) return;
     current.briefingCard.hidden = false;
-    if (!current.state.complete) {
-      current.briefingStatus.hidden = false;
-      setText(current.briefingStatus, "Scanning your inbox for P1 notifications...");
-      current.briefingText.hidden = true;
-      current.briefingMeta.hidden = true;
-      current.briefingRegenerate.hidden = true;
-      return;
-    }
     if (!summarySettings.model || summarySettingsError) {
       current.briefingStatus.hidden = false;
       setText(current.briefingStatus, summarySettingsError ?
         `AI settings need attention: ${summarySettingsError}` :
         "Choose a local model in AI settings to generate your morning executive briefing.");
+      current.briefingText.hidden = true;
+      current.briefingMeta.hidden = true;
+      current.briefingRegenerate.hidden = true;
+      return;
+    }
+
+    if (!force) {
+      const savedToday = await loadSavedTodayBriefing(current.viewer, summarySettings.model);
+      if (view !== current || current.mode !== "today") return;
+      if (savedToday) {
+        current.briefingKey = `saved-day|${savedToday.generatedAt}`;
+        renderSavedTodayBriefing(current, savedToday);
+        return;
+      }
+    }
+
+    if (!current.state.complete) {
+      current.briefingStatus.hidden = false;
+      setText(current.briefingStatus, "Scanning your inbox for P1 notifications...");
       current.briefingText.hidden = true;
       current.briefingMeta.hidden = true;
       current.briefingRegenerate.hidden = true;
@@ -2241,21 +2359,7 @@
       ...briefingItems.map((entry) => `${entry.label}:${entry.score}:${entry.response}:${entry.summary}`)
     ].join("|");
 
-    if (!force && memoryBriefings.has(key)) {
-      const cached = memoryBriefings.get(key);
-      current.briefingKey = key;
-      current.briefingResult = cached;
-      current.briefingStatus.hidden = true;
-      current.briefingText.hidden = false;
-      setText(current.briefingText, cached.briefing);
-      current.briefingMeta.hidden = false;
-      const wordCount = cached.briefing.trim().split(/\s+/).filter(Boolean).length;
-      setText(current.briefingMeta, `Synthesized from ${briefingItems.length} P1 ${briefingItems.length === 1 ? "notification" : "notifications"} · ${wordCount} words · Local AI (${summarySettings.model})`);
-      current.briefingRegenerate.hidden = false;
-      return;
-    }
-
-    if (current.briefingKey === key && (current.briefingRequest || current.briefingResult || current.briefingError)) {
+    if (!force && current.briefingKey === key && (current.briefingRequest || current.briefingResult || current.briefingError)) {
       return;
     }
 
@@ -2285,15 +2389,15 @@
       });
       signal.throwIfAborted();
       if (view !== current) return;
-      memoryBriefings.set(key, result);
-      current.briefingResult = result;
-      current.briefingStatus.hidden = true;
-      current.briefingText.hidden = false;
-      setText(current.briefingText, result.briefing);
-      current.briefingMeta.hidden = false;
-      const wordCount = result.briefing.trim().split(/\s+/).filter(Boolean).length;
-      setText(current.briefingMeta, `Synthesized from ${briefingItems.length} P1 ${briefingItems.length === 1 ? "notification" : "notifications"} · ${wordCount} words · Local AI (${summarySettings.model})`);
-      current.briefingRegenerate.hidden = false;
+      const savedRecord = {
+        briefing: result.briefing,
+        generatedAt: Date.now(),
+        model: summarySettings.model,
+        itemCount: briefingItems.length
+      };
+      await saveTodayBriefingForDay(current.viewer, savedRecord);
+      if (view !== current) return;
+      renderSavedTodayBriefing(current, savedRecord);
     } catch (error) {
       if (signal.aborted || view !== current) return;
       current.briefingError = errorText(error);
@@ -2786,20 +2890,25 @@
 
   const observer = new MutationObserver((records) => {
     let mutatedNativeList = false;
-    const relevant = records.some((record) => {
-      if (record.target instanceof Element && record.target.closest("[data-gns-owned]")) return false;
-      if (record.type !== "childList") return true;
+    let relevant = false;
+    for (const record of records) {
+      if (record.target instanceof Element && record.target.closest("[data-gns-owned]")) continue;
+      if (record.type !== "childList") {
+        relevant = true;
+        continue;
+      }
       for (const node of [...record.addedNodes, ...record.removedNodes]) {
         if (node instanceof Element && !node.hasAttribute("data-gns-owned")) {
+          relevant = true;
           if (node.matches?.(dom.ROW_SELECTOR) || node.querySelector?.(dom.ROW_SELECTOR) ||
               node.matches?.(dom.ROOT_SELECTOR) || node.querySelector?.(dom.ROOT_SELECTOR)) {
             mutatedNativeList = true;
           }
+        } else if (!(node instanceof Element)) {
+          relevant = true;
         }
       }
-      return [...record.addedNodes, ...record.removedNodes].some((node) =>
-        !(node instanceof Element && node.hasAttribute("data-gns-owned")));
-    });
+    }
     if (mutatedNativeList && nativeView) {
       reconcile();
     } else if (relevant) {
@@ -2842,6 +2951,7 @@
       }
     }
   });
+  void preloadMemorySummaries();
   reconcile();
   void loadSummarySettings();
   void loadSubscriptions();

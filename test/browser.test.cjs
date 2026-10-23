@@ -1318,6 +1318,22 @@ test("Priority filter ranks notifications by direct ask, organizational hierarch
   assert.deepEqual(await page.locator(".gns-result-title").allTextContents(), [
     "Manager urgent ask on roadmap"
   ]);
+
+  // Leaving Today and returning on the same day reuses the saved daily briefing without calling the LLM again
+  const chatCallsAfterFirstToday = (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length;
+  await page.goto("https://github.com/notifications");
+  await page.goto("https://github.com/notifications#today");
+  await page.locator("[data-gns-panel='today']").waitFor();
+  await eventually(async () => (await page.locator(".gns-today-paragraph").isVisible()) &&
+    (await page.locator(".gns-today-paragraph").textContent()).includes("acme/console#203"),
+    "Saved daily Today briefing was not restored");
+  const chatCallsAfterRevisit = (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length;
+  assert.equal(chatCallsAfterRevisit, chatCallsAfterFirstToday, "Revisiting Today on the same day must not regenerate the briefing");
+
+  // Clicking Regenerate briefing explicitly forces a fresh synthesis
+  await page.getByRole("button", { name: "Regenerate briefing", exact: true }).click();
+  await eventually(async () => (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length > chatCallsAfterRevisit,
+    "Regenerate briefing button did not trigger a new synthesis");
   assert.deepEqual(pageErrors, []);
 });
 
