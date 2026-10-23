@@ -83,6 +83,9 @@ test("recognizes the local filter without treating ordinary GitHub queries as su
   assert.equal(core.isPriorityQuery(" priority:only "), true);
   assert.equal(core.isPriorityView("https://github.com/notifications#priority"), true);
   assert.equal(core.isPriorityView("https://github.com/notifications?query=priority%3Aonly"), true);
+  assert.equal(core.isTodayView("https://github.com/notifications#today"), true);
+  assert.equal(core.isTodayView("https://github.com/notifications?query=today%3Aonly"), true);
+  assert.equal(core.isTodayView("https://github.com/notifications#priority"), false);
   assert.equal(core.isPriorityView("https://github.com/notifications#subscriptions"), false);
 });
 

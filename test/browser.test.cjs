@@ -162,6 +162,12 @@ before(async () => {
       await route.fulfill({ status: 200, contentType: "text/plain", body: "ok" });
       return;
     }
+    if (url.pathname === "/notifications/beta/unmark" && route.request().method() === "POST") {
+      const body = route.request().postData() || "";
+      routeState.unmarkedIds = (routeState.unmarkedIds || []).concat(new URLSearchParams(body).getAll("notification_ids[]"));
+      await route.fulfill({ status: 200, contentType: "text/plain", body: "ok" });
+      return;
+    }
     if (url.pathname === "/notifications") {
       if (routeState.notificationPages) {
         const options = routeState.notificationPages[url.search];
@@ -259,7 +265,15 @@ beforeEach(async () => {
           state.active--;
         }
       }
-      const message = { role: "assistant", content: state.content ?? JSON.stringify(state.result) };
+      const reqBody = options.body ? JSON.parse(options.body) : null;
+      const isBriefing = Boolean(reqBody?.format?.properties?.briefing || reqBody?.response_format?.json_schema?.name === "morning_briefing");
+      const defaultBriefing = {
+        briefing: "Start with @lead-mgr on acme/console#203—she needs your roadmap sign-off today so the team can lock Q4 scope."
+      };
+      const message = {
+        role: "assistant",
+        content: state.content ?? JSON.stringify(isBriefing ? (state.briefingResult || defaultBriefing) : state.result)
+      };
       return new Response(JSON.stringify(chat ? (lmStudio || splash ?
         { choices: [{ finish_reason: "stop", message }] } :
         { done: true, done_reason: "stop", message }) :
@@ -1281,6 +1295,62 @@ test("Priority filter ranks notifications by direct ask, organizational hierarch
     "Manager urgent ask on roadmap",
     "Standard peer mention"
   ]);
+
+  // Verify Today, Priority, and Subscriptions are placed at the top of the Filters list
+  const filterLabels = await page.getByRole("list", { name: "Filters", exact: true }).locator("li > a").evaluateAll((nodes) =>
+    nodes.map((n) => n.textContent.trim().replace(/\s+/g, " "))
+  );
+  assert.match(filterLabels[0], /^Today/);
+  assert.match(filterLabels[1], /^Priority/);
+  assert.match(filterLabels[2], /^Subscriptions/);
+  assert.equal(filterLabels[3], "Mentioned");
+
+  // Verify Today view (#today) automatically summarizes P1 items and synthesizes the Morning Executive Briefing
+  await enableSummaries(false);
+  await page.locator("[data-gns-today-filter]").click();
+  await page.locator("[data-gns-panel='today']").waitFor();
+  await complete();
+  assert.equal(await page.locator(".gns-heading").textContent(), "Today");
+  await eventually(async () => {
+    const p = page.locator(".gns-today-paragraph");
+    return (await p.isVisible()) && (await p.textContent()).includes("acme/console#203");
+  }, "Today view did not automatically generate the morning executive briefing");
+  assert.deepEqual(await page.locator(".gns-result-title").allTextContents(), [
+    "Manager urgent ask on roadmap"
+  ]);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("restores unread state via /notifications/beta/unmark after summarizing an unread notification and prevents native Done DOM swaps from re-queuing summaries", async () => {
+  await enableSummaries(true);
+  routeState.rows = [
+    { href: "/acme/console/issues/11#issuecomment-123", title: "Tighten the release checklist", unread: true, reason: "mention", participants: ["ada"] },
+    { href: "/acme/console/pull/42#issuecomment-123", title: "Keep keyboard focus after saving", unread: true, reason: "mention", participants: ["ada"] }
+  ];
+  routeState.next = null;
+  await page.goto("https://github.com/notifications");
+  await page.evaluate(() => {
+    const form = document.createElement("form");
+    form.setAttribute("action", "/notifications/beta/unmark");
+    form.innerHTML = '<input type="hidden" name="authenticity_token" value="unmark-tok-1">';
+    document.body.append(form);
+  });
+  await summarized(2);
+  await eventually(() => (routeState.unmarkedIds || []).length >= 2, "Unread notifications were not restored via /notifications/beta/unmark");
+  const initialChatCalls = (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length;
+  assert.equal(initialChatCalls, 2);
+
+  // Simulate GitHub replacing the .js-check-all-container DOM 1s after clicking Done on row 1
+  await page.evaluate(() => {
+    const container = document.querySelector(".js-check-all-container");
+    const clone = container.cloneNode(true);
+    clone.querySelectorAll("[data-gns-owned]").forEach((n) => n.remove());
+    clone.querySelector(".notifications-list-item").remove();
+    container.replaceWith(clone);
+  });
+  await eventually(async () => (await page.locator(".notifications-list-item .gns-ai-summary[data-state='done']").count()) === 1, "Remaining row did not synchronously restore its summary");
+  const afterSwapChatCalls = (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length;
+  assert.equal(afterSwapChatCalls, initialChatCalls, "DOM replacement after clicking Done must not re-run local LLM inference");
   assert.deepEqual(pageErrors, []);
 });
 

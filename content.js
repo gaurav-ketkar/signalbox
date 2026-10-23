@@ -28,6 +28,7 @@
   const SCAN_CACHE_MS = 10 * 60 * 1000;
   const PRIORITY_CACHE_MS = 4 * 60 * 60 * 1000;
   const memorySummaries = new Map();
+  const memoryBriefings = new Map();
   let scheduled = false;
 
   function memorySummaryKey(viewer, model, itemKey) {
@@ -45,7 +46,7 @@
   function isFreshScanCache(current, checkedAt, now = Date.now()) {
     const age = now - checkedAt;
     if (!Number.isFinite(age) || age < 0) return false;
-    if (current?.mode === "priority") {
+    if (current?.mode === "priority" || current?.mode === "today") {
       return age < PRIORITY_CACHE_MS && sameLocalDay(checkedAt, now);
     }
     return age < SCAN_CACHE_MS;
@@ -97,6 +98,56 @@
     path.setAttribute("stroke-linejoin", "round");
     svg.append(path);
     return svg;
+  }
+
+  function todayIcon() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(svg.namespaceURI, "path");
+    path.setAttribute("d", "M8 4.75a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5ZM8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M12.6 3.4l-1.06 1.06M4.46 11.54 3.4 12.6");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("stroke-linecap", "round");
+    svg.append(path);
+    return svg;
+  }
+
+  async function restoreUnreadState(item) {
+    if (!item?.unread || !item.notificationId) return;
+    const token = item.unmarkToken ||
+      document.querySelector("form[action='/notifications/beta/unmark'] input[name='authenticity_token']")?.value || "";
+    if (!token) return;
+    try {
+      const body = new URLSearchParams();
+      body.set("authenticity_token", token);
+      body.append("notification_ids[]", item.notificationId);
+      const response = await fetch(`${core.ORIGIN}/notifications/beta/unmark`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        body: body.toString(),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!response.ok) return;
+      for (const row of document.querySelectorAll(dom.ROW_SELECTOR)) {
+        const rowId = row.getAttribute("data-notification-id") ||
+          row.querySelector("input[name='notification_ids[]']")?.value || "";
+        if (rowId === item.notificationId) {
+          row.classList.add("notification-unread");
+          row.classList.remove("notification-read");
+          row.setAttribute("data-unread", "true");
+        }
+      }
+    } catch {
+      // Best-effort unread restoration; never fail preview or summary generation.
+    }
   }
 
   function computeItemPriority(current, item) {
@@ -225,7 +276,7 @@
   }
 
   async function refinePriorityWithKev(current) {
-    if (!current || current.mode !== "priority" || current.kevRefining || current.kevOffline || current.kevDone) return;
+    if (!current || (current.mode !== "priority" && current.mode !== "today") || current.kevRefining || current.kevOffline || current.kevDone) return;
     current.kevRefining = true;
     const signal = current.previewController.signal;
     try {
@@ -660,13 +711,19 @@
     } else {
       document.querySelector(".gns-filter-group")?.remove();
     }
-    for (const link of document.querySelectorAll("[data-gns-filter], [data-gns-priority-filter]")) {
+    for (const link of document.querySelectorAll("[data-gns-filter], [data-gns-priority-filter], [data-gns-today-filter]")) {
       if (!filter.enabled || !lists.some((list) => list.contains(link))) {
         (link.closest(".gns-sidebar-item") || link).remove();
       }
     }
-    const priorityCount = view?.mode === "priority" && view.cacheLoaded ?
+    const hasPriorityCache = (view?.mode === "priority" || view?.mode === "today") && view.cacheLoaded;
+    const priorityCount = hasPriorityCache ?
       String([...view.items.values()].filter((item) => computeItemPriority(view, item).qualifies).length) : "★";
+    const todayCount = hasPriorityCache ?
+      String([...view.items.values()].filter((item) => {
+        const p = computeItemPriority(view, item);
+        return p.qualifies && p.tier === "P1";
+      }).length) : "P1";
     let activeSubCount = null;
     if (view?.cacheLoaded) {
       const subMatches = [...view.items.values()].filter((item) => subscriptions.has(item.key));
@@ -674,6 +731,23 @@
       activeSubCount = subVisible.length;
     }
     for (const list of filter.enabled ? lists : []) {
+      let todayLink = list.querySelector("[data-gns-today-filter]");
+      if (!todayLink) {
+        todayLink = owned(element("a", "gns-sidebar-link"));
+        todayLink.href = INBOX + core.TODAY_HASH;
+        todayLink.dataset.gnsTodayFilter = "";
+        todayLink.setAttribute("data-turbo", "false");
+        todayLink.title = "Today: Morning executive briefing for P1 notifications (Experimental)";
+        todayLink.append(todayIcon(), element("span", "gns-today-filter-name", "Today"), element("span", "gns-count"));
+        const todayLi = owned(element("li", "gns-sidebar-item"));
+        todayLi.append(todayLink);
+        list.prepend(todayLi);
+      }
+      setText(todayLink.querySelector(".gns-count"), todayCount);
+      todayLink.querySelector(".gns-count").title = "P1 notifications for Today's briefing";
+      if (activeMode === "today") todayLink.setAttribute("aria-current", "page");
+      else todayLink.removeAttribute("aria-current");
+
       let priorityLink = list.querySelector("[data-gns-priority-filter]");
       if (!priorityLink) {
         priorityLink = owned(element("a", "gns-sidebar-link"));
@@ -684,7 +758,7 @@
         priorityLink.append(priorityIcon(), element("span", "gns-priority-filter-name", "Priority"), element("span", "gns-count"));
         const priorityLi = owned(element("li", "gns-sidebar-item"));
         priorityLi.append(priorityLink);
-        list.append(priorityLi);
+        list.prepend(priorityLi);
       }
       setText(priorityLink.querySelector(".gns-count"), priorityCount);
       priorityLink.querySelector(".gns-count").title = "High-priority notifications";
@@ -701,7 +775,7 @@
         link.append(bookmark(), element("span", "gns-filter-name"), element("span", "gns-count"));
         const li = owned(element("li", "gns-sidebar-item"));
         li.append(link);
-        list.append(li);
+        list.prepend(li);
       }
       setText(link.querySelector(".gns-filter-name"), filter.name);
       setText(link.querySelector(".gns-count"), !ready ? "..." : activeSubCount !== null ? String(activeSubCount) : String(subscriptions.size));
@@ -710,6 +784,14 @@
         `${subscriptions.size} items in your subscription list`;
       if (activeMode === "subscriptions") link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
+
+      const todayItem = todayLink.closest(".gns-sidebar-item");
+      const priorityItem = priorityLink.closest(".gns-sidebar-item");
+      const subItem = link.closest(".gns-sidebar-item");
+      if (todayItem && priorityItem && subItem &&
+          (list.children[0] !== todayItem || list.children[1] !== priorityItem || list.children[2] !== subItem)) {
+        list.prepend(todayItem, priorityItem, subItem);
+      }
 
       if (active) {
         const navigation = link.closest(SIDEBAR_SELECTOR) || list;
@@ -887,10 +969,11 @@
   function makeView(root, mode = "subscriptions") {
     const panel = owned(element("section", "gns-panel"));
     panel.dataset.gnsPanel = mode;
-    panel.setAttribute("aria-label", mode === "priority" ? "Priority notifications" : "Subscribed notifications");
+    panel.setAttribute("aria-label", mode === "today" ? "Today morning briefing" :
+      mode === "priority" ? "Priority notifications" : "Subscribed notifications");
     const header = element("div", "gns-panel-header");
     const heading = element("div", "gns-heading-group");
-    const title = element("h2", "gns-heading", mode === "priority" ? "Priority" : filter.name);
+    const title = element("h2", "gns-heading", mode === "today" ? "Today" : mode === "priority" ? "Priority" : filter.name);
     const count = element("span", "gns-counter", "");
     const live = element("span", "gns-live");
     live.setAttribute("aria-hidden", "true");
@@ -909,7 +992,8 @@
       } else return runView(view);
     });
     const refresh = button("", "gns-icon-button gns-refresh", () => {
-      const currentMode = view?.mode || (core.isPriorityView(location.href) ? "priority" : "subscriptions");
+      const currentMode = view?.mode || (core.isTodayView?.(location.href) ? "today" :
+        core.isPriorityView(location.href) ? "priority" : "subscriptions");
       stopView();
       ensureView(true, currentMode);
     });
@@ -1016,6 +1100,36 @@
     const sweepStatus = element("span", "gns-sweep-status");
     sweepStatus.setAttribute("role", "status");
     sweepBar.append(sweepLabel, sweepReview, sweepTeam, sweepParticipating, sweepAll, sweepStatus);
+
+    const briefingCard = element("section", "gns-today-briefing");
+    briefingCard.dataset.gnsTodayBriefing = "";
+    briefingCard.setAttribute("aria-label", "Morning executive briefing");
+    briefingCard.hidden = mode !== "today";
+    const briefingHeader = element("div", "gns-today-briefing-header");
+    const briefingTitleWrap = element("div", "gns-today-briefing-titles");
+    const briefingEyebrow = element("span", "gns-today-eyebrow", "Morning Executive Briefing");
+    const briefingPill = element("span", "gns-today-pill", "Experimental · P1 Priority");
+    briefingTitleWrap.append(briefingEyebrow, briefingPill);
+    const briefingRegenerate = button("Regenerate briefing", "gns-text-button gns-today-regenerate", () => {
+      if (view && view.mode === "today") {
+        view.briefingKey = "";
+        view.briefingResult = null;
+        view.briefingError = "";
+        view.briefingRequest?.abort();
+        view.briefingRequest = null;
+        void updateTodayBriefing(view, true);
+      }
+    });
+    briefingRegenerate.hidden = true;
+    briefingHeader.append(briefingTitleWrap, briefingRegenerate);
+    const briefingStatus = element("p", "gns-today-status");
+    briefingStatus.setAttribute("role", "status");
+    const briefingText = element("p", "gns-today-paragraph");
+    briefingText.hidden = true;
+    const briefingMeta = element("p", "gns-today-meta");
+    briefingMeta.hidden = true;
+    briefingCard.append(briefingHeader, briefingStatus, briefingText, briefingMeta);
+
     const error = element("p", "gns-error");
     error.setAttribute("role", "alert");
     error.hidden = true;
@@ -1026,7 +1140,7 @@
     const emptyText = element("p");
     const add = button("Add subscriptions", "gns-button gns-button-primary", openManager);
     empty.append(bookmark(), emptyTitle, emptyText, add);
-    panel.append(header, sweepBar, localError, error, list, empty);
+    panel.append(header, briefingCard, sweepBar, localError, error, list, empty);
     if (root) root.before(panel);
     else (document.querySelector("main, [role='main']") || document.body).prepend(panel);
     return {
@@ -1035,6 +1149,8 @@
       rendered: new Map(), controller: null, previewController: new AbortController(), commentTools: new Map(),
       authors: new Map(), responses: new Map(), kevScores: new Map(), kevOffline: false, kevDone: false,
       priorityOrder: null, prioritySnapshot: null,
+      briefingCard, briefingStatus, briefingText, briefingMeta, briefingRegenerate,
+      briefingKey: "", briefingResult: null, briefingError: "", briefingRequest: null,
       sweepBar, sweepReview, sweepTeam, sweepParticipating, sweepAll, sweepStatus, sweeping: false, sweepMessage: "",
       summaryNote, summarize, stopSummaries: stop, summarySettingsButton: settings,
       reviewNote, showCaughtUpButton: showCaughtUp, undo, undoItem: null,
@@ -1163,7 +1279,7 @@
   }
 
   function renderLive(current) {
-    const canScan = current.mode === "priority" || subscriptions.size > 0;
+    const canScan = current.mode === "priority" || current.mode === "today" || subscriptions.size > 0;
     const searching = !current.isNative && !current.state.complete && !current.error && !storageError && ready && canScan;
     const hiddenNote = !current.isNative && current.hiddenCaughtUpCount > 0 && !current.showCaughtUp ?
       `${current.hiddenCaughtUpCount} caught up (hidden)` : "";
@@ -1353,6 +1469,7 @@
       const request = { controller, promise: null };
       request.promise = preview.load(exactTarget, { signal }).then((value) => {
         signal.throwIfAborted();
+        void restoreUnreadState(item);
         comment = value;
         commentLoaded = true;
         return value;
@@ -1383,6 +1500,7 @@
       const request = { controller, promise: null };
       request.promise = preview.load(target, { signal, allowFallback: true }).then((value) => {
         signal.throwIfAborted();
+        void restoreUnreadState(item);
         const resolved = value || {
           text: [
             item.title || item.label,
@@ -1472,6 +1590,9 @@
       recheck.disabled = !!summarySettingsError;
       updateSummaryToggle();
       renderSummaryControls(current);
+      if (view === current && current.mode === "today" && current.state?.complete) {
+        void updateTodayBriefing(current);
+      }
     }
 
     function clearSummary() {
@@ -1602,6 +1723,7 @@
       const memRecord = memKey ? memorySummaries.get(memKey) : null;
       if (memRecord && memRecord.activity && memRecord.activity === activity) {
         cached = memRecord;
+        automaticAttempted = true;
         clearSummary();
         showSummary(memRecord, false);
         paintSummary();
@@ -1821,6 +1943,7 @@
       pending: () => ["queued", "running"].includes(phase),
       priority: () => computeItemPriority(current, item).score,
       finished: () => phase === "done",
+      getSummaryRecord: () => cached,
       canStart: () => !!target && !caughtUp(current, item) && !["loading", "queued", "running", "done", "unavailable"].includes(phase),
       cancel: () => {
         lifetime.abort();
@@ -1914,7 +2037,7 @@
   const VISIBLE_PARTICIPANTS = 3;
 
   function rowSignals(item, current) {
-    const isPriority = current?.mode === "priority";
+    const isPriority = current?.mode === "priority" || current?.mode === "today";
     if (!isPriority && !item.repository && !item.reason && !item.participants.length) return null;
     const line = element("div", "gns-signals");
     if (isPriority) {
@@ -2035,13 +2158,163 @@
     return row;
   }
 
+  async function updateTodayBriefing(current, force = false) {
+    if (!current || current.mode !== "today" || view !== current || !current.briefingCard) return;
+    current.briefingCard.hidden = false;
+    if (!current.state.complete) {
+      current.briefingStatus.hidden = false;
+      setText(current.briefingStatus, "Scanning your inbox for P1 notifications...");
+      current.briefingText.hidden = true;
+      current.briefingMeta.hidden = true;
+      current.briefingRegenerate.hidden = true;
+      return;
+    }
+    if (!summarySettings.model || summarySettingsError) {
+      current.briefingStatus.hidden = false;
+      setText(current.briefingStatus, summarySettingsError ?
+        `AI settings need attention: ${summarySettingsError}` :
+        "Choose a local model in AI settings to generate your morning executive briefing.");
+      current.briefingText.hidden = true;
+      current.briefingMeta.hidden = true;
+      current.briefingRegenerate.hidden = true;
+      return;
+    }
+    const p1Items = [...current.rendered.keys()].map((key) => current.items.get(key)).filter(Boolean);
+    if (!p1Items.length) {
+      current.briefingStatus.hidden = true;
+      current.briefingText.hidden = false;
+      setText(current.briefingText, "No P1 fires are waiting on you right now. Your inbox is clear of urgent blockers and direct leadership asks.");
+      current.briefingMeta.hidden = true;
+      current.briefingRegenerate.hidden = true;
+      return;
+    }
+    let waitingCount = 0;
+    let startedAny = false;
+    for (const item of p1Items) {
+      const tools = current.commentTools.get(item.key);
+      if (!tools) continue;
+      if (tools.canStart()) {
+        tools.startSummary();
+        startedAny = true;
+        waitingCount += 1;
+      } else if (!tools.finished()) {
+        waitingCount += 1;
+      }
+    }
+    if (waitingCount > 0 || startedAny) {
+      const doneCount = p1Items.length - waitingCount;
+      current.briefingStatus.hidden = false;
+      setText(current.briefingStatus, `Reading P1 threads (${doneCount} of ${p1Items.length} summarized) before writing your morning briefing...`);
+      if (!current.briefingResult) {
+        current.briefingText.hidden = true;
+        current.briefingMeta.hidden = true;
+      }
+      current.briefingRegenerate.hidden = true;
+      return;
+    }
+
+    const briefingItems = [];
+    for (const item of p1Items) {
+      const tools = current.commentTools.get(item.key);
+      const record = tools?.getSummaryRecord?.() ||
+        memorySummaries.get(memorySummaryKey(current.viewer, summarySettings.model, item.key));
+      if (!record?.result) continue;
+      const priority = computeItemPriority(current, item);
+      briefingItems.push({
+        label: item.label,
+        title: item.title,
+        author: record.author || item.participants?.[0]?.username || "",
+        role: priority.orgMatch?.role || "",
+        reason: item.reason || "",
+        score: priority.score,
+        response: current.responses.get(item.key) || record.result.response || "unclear",
+        summary: record.result.summary,
+        action: record.result.action || "",
+        evidence: record.result.evidence || ""
+      });
+    }
+    if (!briefingItems.length) return;
+
+    const key = [
+      current.viewer || "anon",
+      summarySettings.model,
+      ...briefingItems.map((entry) => `${entry.label}:${entry.score}:${entry.response}:${entry.summary}`)
+    ].join("|");
+
+    if (!force && memoryBriefings.has(key)) {
+      const cached = memoryBriefings.get(key);
+      current.briefingKey = key;
+      current.briefingResult = cached;
+      current.briefingStatus.hidden = true;
+      current.briefingText.hidden = false;
+      setText(current.briefingText, cached.briefing);
+      current.briefingMeta.hidden = false;
+      const wordCount = cached.briefing.trim().split(/\s+/).filter(Boolean).length;
+      setText(current.briefingMeta, `Synthesized from ${briefingItems.length} P1 ${briefingItems.length === 1 ? "notification" : "notifications"} · ${wordCount} words · Local AI (${summarySettings.model})`);
+      current.briefingRegenerate.hidden = false;
+      return;
+    }
+
+    if (current.briefingKey === key && (current.briefingRequest || current.briefingResult || current.briefingError)) {
+      return;
+    }
+
+    current.briefingRequest?.abort();
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, current.previewController.signal]);
+    current.briefingRequest = controller;
+    current.briefingKey = key;
+    current.briefingError = "";
+    current.briefingStatus.hidden = false;
+    setText(current.briefingStatus, "Drafting your morning executive briefing locally (taking extra time for high-signal synthesis)...");
+    current.briefingRegenerate.hidden = true;
+
+    try {
+      const result = await summaryClient.request({
+        type: "briefing",
+        model: summarySettings.model,
+        viewer: current.viewer,
+        items: briefingItems
+      }, {
+        signal,
+        onProgress: (message) => {
+          if (!signal.aborted && view === current) {
+            setText(current.briefingStatus, message);
+          }
+        }
+      });
+      signal.throwIfAborted();
+      if (view !== current) return;
+      memoryBriefings.set(key, result);
+      current.briefingResult = result;
+      current.briefingStatus.hidden = true;
+      current.briefingText.hidden = false;
+      setText(current.briefingText, result.briefing);
+      current.briefingMeta.hidden = false;
+      const wordCount = result.briefing.trim().split(/\s+/).filter(Boolean).length;
+      setText(current.briefingMeta, `Synthesized from ${briefingItems.length} P1 ${briefingItems.length === 1 ? "notification" : "notifications"} · ${wordCount} words · Local AI (${summarySettings.model})`);
+      current.briefingRegenerate.hidden = false;
+    } catch (error) {
+      if (signal.aborted || view !== current) return;
+      current.briefingError = errorText(error);
+      current.briefingStatus.hidden = false;
+      setText(current.briefingStatus, `Morning briefing could not be generated: ${current.briefingError}`);
+      current.briefingRegenerate.hidden = false;
+    } finally {
+      if (current.briefingRequest === controller) {
+        current.briefingRequest = null;
+      }
+    }
+  }
+
   function renderView(current) {
     if (view !== current) return;
-    const isPriority = current.mode === "priority";
+    const isToday = current.mode === "today";
+    const isPriority = current.mode === "priority" || isToday;
     if (isPriority && current.state.complete && !current.priorityOrder) {
       lockPrioritySnapshot(current);
     }
-    const matches = !ready ? [] : isPriority ?
+    const allPriorityMatches = !ready ? [] :
       (current.priorityOrder ?
         current.priorityOrder.map((key) => current.items.get(key)).filter(Boolean) :
         [...current.items.values()]
@@ -2049,7 +2322,10 @@
           .filter(({ priority }) => priority.qualifies)
           .sort((left, right) => right.priority.score - left.priority.score ||
             (Date.parse(right.item.dateTime || "") || 0) - (Date.parse(left.item.dateTime || "") || 0))
-          .map(({ item }) => item)) :
+          .map(({ item }) => item));
+    const matches = !ready ? [] : isToday ?
+      allPriorityMatches.filter((item) => computeItemPriority(current, item).tier === "P1") :
+      isPriority ? allPriorityMatches :
       [...current.items.values()].filter((item) => subscriptions.has(item.key));
     const reviewed = matches.filter((item) => caughtUp(current, item));
     const visible = current.showCaughtUp ? matches : matches.filter((item) => !caughtUp(current, item));
@@ -2120,15 +2396,26 @@
     const hasItems = ready && (isPriority || subscriptions.size > 0);
     const message = storageError || current.error;
     current.hiddenCaughtUpCount = reviewed.length;
-    setText(current.title, isPriority ? "Priority" : filter.name);
+    setText(current.title, isToday ? "Today" : isPriority ? "Priority" : filter.name);
     setText(current.count, ready ? String(visible.length) : "");
     current.count.hidden = !ready;
     current.count.title = reviewed.length && !current.showCaughtUp ?
       `${visible.length} visible (${reviewed.length} hidden as caught up; ${subscriptions.size} total saved in list)` :
       `${visible.length} matching ${visible.length === 1 ? "notification" : "notifications"}`;
     current.count.setAttribute("aria-label", current.count.title);
+    for (const todayBadge of document.querySelectorAll("[data-gns-today-filter] .gns-count")) {
+      if (isPriority && current.cacheLoaded) {
+        const p1Visible = allPriorityMatches.filter((item) =>
+          computeItemPriority(current, item).tier === "P1" && (current.showCaughtUp || !caughtUp(current, item))
+        );
+        setText(todayBadge, String(p1Visible.length));
+      }
+    }
     for (const priorityBadge of document.querySelectorAll("[data-gns-priority-filter] .gns-count")) {
-      if (isPriority && current.cacheLoaded) setText(priorityBadge, String(visible.length));
+      if (isPriority && current.cacheLoaded) {
+        const prioVisible = allPriorityMatches.filter((item) => current.showCaughtUp || !caughtUp(current, item));
+        setText(priorityBadge, String(prioVisible.length));
+      }
     }
     if (!isPriority && current.cacheLoaded) {
       for (const subBadge of document.querySelectorAll("[data-gns-filter] .gns-count")) {
@@ -2152,17 +2439,19 @@
     current.refresh.disabled = !ready;
     current.empty.hidden = visible.length > 0;
     current.add.hidden = !ready || hasItems;
-    let emptyTitle = isPriority ? "Loading priority notifications" : "Loading subscriptions";
-    let emptyText = isPriority ? "Scanning your inbox for direct asks, leadership activity, and recent updates." : "Your saved list will appear here.";
+    let emptyTitle = isToday ? "Loading Today's P1 briefing" : isPriority ? "Loading priority notifications" : "Loading subscriptions";
+    let emptyText = isToday ? "Scanning your inbox for P1 notifications and preparing your morning executive briefing." :
+      isPriority ? "Scanning your inbox for direct asks, leadership activity, and recent updates." : "Your saved list will appear here.";
     if (ready && !hasItems) {
       emptyTitle = "Choose what belongs here";
       emptyText = "Add issue, pull request, or discussion links. Only their inbox notifications will appear.";
     } else if (hasItems) {
       emptyTitle = message ? "The search needs attention" :
-        current.state.complete ? (isPriority ? "No priority notifications right now" : "No matching inbox notifications") :
-        current.paused ? "Search paused" : (isPriority ? "Scoring your notifications" : "Looking for your subscriptions");
+        current.state.complete ? (isToday ? "No P1 notifications today" : isPriority ? "No priority notifications right now" : "No matching inbox notifications") :
+        current.paused ? "Search paused" : (isToday ? "Finding P1 notifications" : isPriority ? "Scoring your notifications" : "Looking for your subscriptions");
       emptyText = current.state.complete ?
-        (isPriority ? "None of your inbox notifications crossed the Priority threshold (score ≥ 35)." :
+        (isToday ? "None of your inbox notifications crossed the P1 threshold (score ≥ 70)." :
+          isPriority ? "None of your inbox notifications crossed the Priority threshold (score ≥ 35)." :
           "None of the inbox notifications match your list. Completed notifications are still in GitHub's Done view.") :
         "Matches appear as pages are checked. You can leave this view or pause at any time.";
       if (reviewed.length && !visible.length) {
@@ -2198,6 +2487,9 @@
       setText(current.sweepStatus, current.sweepMessage);
     }
     renderLive(current);
+    if (isToday) {
+      void updateTodayBriefing(current);
+    }
     if (isPriority && current.state.complete && !current.kevOffline && !current.kevRefining && !current.kevDone && current.items.size > 0) {
       void refinePriorityWithKev(current);
     }
@@ -2283,7 +2575,7 @@
           current.useDocument = false;
           try {
             for (const item of dom.readPage(document, INBOX).items) {
-              if (current.mode === "priority" && current.priorityOrder?.length && current.items.has(item.key)) {
+              if ((current.mode === "priority" || current.mode === "today") && current.priorityOrder?.length && current.items.has(item.key)) {
                 // Preserve the pinned item's priority snapshot while updating read/unread dot state.
                 current.items.set(item.key, { ...current.items.get(item.key), unread: item.unread });
               } else {
@@ -2294,7 +2586,7 @@
             // The cached result is still usable when the current page cannot be read.
           }
         }
-        if (current.mode === "priority" && !current.priorityOrder?.length) {
+        if ((current.mode === "priority" || current.mode === "today") && !current.priorityOrder?.length) {
           lockPrioritySnapshot(current);
           saveScanCache(current);
         }
@@ -2328,7 +2620,7 @@
   }
 
   async function runView(current) {
-    const canScan = current.mode === "priority" || subscriptions.size > 0;
+    const canScan = current.mode === "priority" || current.mode === "today" || subscriptions.size > 0;
     if (view !== current || !current.cacheLoaded || current.state.running || !ready || !canScan || current.state.complete) return;
     current.started = true;
     current.paused = false;
@@ -2371,7 +2663,8 @@
     }
   }
 
-  function ensureView(fresh = false, mode = core.isPriorityView(location.href) ? "priority" : "subscriptions") {
+  function ensureView(fresh = false, mode = core.isTodayView?.(location.href) ? "today" :
+      core.isPriorityView(location.href) ? "priority" : "subscriptions") {
     const root = dom.nativeRoot(document);
     const signature = mode + "|" + location.pathname + location.search + "|" + signedInLogin();
     if (view && (!view.panel.isConnected || view.nativeRoot !== root || view.signature !== signature)) stopView();
@@ -2382,7 +2675,7 @@
       void loadScanCache(view, fresh);
     }
     hideNative(root);
-    const canScan = view.mode === "priority" || subscriptions.size > 0;
+    const canScan = view.mode === "priority" || view.mode === "today" || subscriptions.size > 0;
     if (!canScan && view.state.running) {
       view.paused = true;
       view.pausedByEmpty = true;
@@ -2400,6 +2693,7 @@
       const previous = view;
       view = null;
       previous.controller?.abort();
+      previous.briefingRequest?.abort();
       previous.previewController.abort();
       previous.listeners.abort();
       previous.summaryQueue.length = 0;
@@ -2432,8 +2726,10 @@
   function ensureNativeView() {
     const root = dom.nativeRoot(document);
     const signature = location.pathname + location.search + "|" + signedInLogin();
-    if (nativeView && (nativeView.nativeRoot !== root || nativeView.signature !== signature)) {
+    if (nativeView && nativeView.signature !== signature) {
       stopNativeView();
+    } else if (nativeView) {
+      nativeView.nativeRoot = root;
     }
     if (!nativeView) {
       nativeView = makeNativeView(root);
@@ -2453,7 +2749,8 @@
 
   function reconcile() {
     const notifications = core.isNotifications(location.href);
-    const activeMode = core.isPriorityView(location.href) ? "priority" :
+    const activeMode = core.isTodayView?.(location.href) ? "today" :
+      core.isPriorityView(location.href) ? "priority" :
       core.isSubscriptionView(location.href) ? "subscriptions" : "";
     if (notifications) {
       document.querySelector("[data-gns-item-tools]")?.remove();
@@ -2470,7 +2767,7 @@
       stopView();
       stopNativeView();
       restoreSelection();
-      for (const link of document.querySelectorAll("[data-gns-filter], [data-gns-priority-filter]")) {
+      for (const link of document.querySelectorAll("[data-gns-filter], [data-gns-priority-filter], [data-gns-today-filter]")) {
         (link.closest(".gns-sidebar-item") || link).remove();
       }
       document.querySelector(".gns-filter-group")?.remove();
@@ -2488,21 +2785,22 @@
   }
 
   const observer = new MutationObserver((records) => {
-    let addedNativeRows = false;
+    let mutatedNativeList = false;
     const relevant = records.some((record) => {
       if (record.target instanceof Element && record.target.closest("[data-gns-owned]")) return false;
       if (record.type !== "childList") return true;
-      for (const node of record.addedNodes) {
+      for (const node of [...record.addedNodes, ...record.removedNodes]) {
         if (node instanceof Element && !node.hasAttribute("data-gns-owned")) {
-          if (node.matches?.(dom.ROW_SELECTOR) || node.querySelector?.(dom.ROW_SELECTOR)) {
-            addedNativeRows = true;
+          if (node.matches?.(dom.ROW_SELECTOR) || node.querySelector?.(dom.ROW_SELECTOR) ||
+              node.matches?.(dom.ROOT_SELECTOR) || node.querySelector?.(dom.ROOT_SELECTOR)) {
+            mutatedNativeList = true;
           }
         }
       }
       return [...record.addedNodes, ...record.removedNodes].some((node) =>
         !(node instanceof Element && node.hasAttribute("data-gns-owned")));
     });
-    if (addedNativeRows && nativeView) {
+    if (mutatedNativeList && nativeView) {
       reconcile();
     } else if (relevant) {
       schedule();

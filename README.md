@@ -12,7 +12,8 @@ No GitHub token, cloud API key, or build step required.
 
 ## Highlights
 
-- **Inline AI summaries on every filter view:** Works in `Inbox`, `Mentioned`, `Assigned`, `Participating`, custom filters, **Priority**, and **Subscriptions**. Every summary addresses you in the second person, leads with a status pill (**`Needs your response`**, **`FYI`**, or **`Unclear ask`**), and cites a verbatim quote when you're mentioned.
+- **Morning Executive Briefing in `Today` (`#today`):** Automatically summarizes your **P1 Priority** notifications and synthesizes a single-paragraph (<250-word) morning executive briefing right above the P1 threads—crafted around Joel Schwartzberg's *Get to the Point* and Paul Graham's *Write Like You Talk* / *How to Write Usefully*.
+- **Inline AI summaries on every filter view (without losing unread state):** Works in `Inbox`, `Mentioned`, `Assigned`, `Participating`, custom filters, **Today**, **Priority**, and **Subscriptions**. Unread notifications that get summarized are automatically restored to unread (`POST /notifications/beta/unmark`) right after their source page is fetched. Every summary addresses you in the second person, leads with a status pill (**`Needs your response`**, **`FYI`**, or **`Unclear ask`**), and cites a verbatim quote when you're mentioned.
 - **Smart `Priority` view (`#priority`):** Ranks notifications (0–100) by direct asks, your team/repo rules, and a 72-hour SLA recency curve. Pins the list for 4 hours so rows never jump around while you work through them.
 - **Deliberate `Subscriptions` view (`#subscriptions`):** Bookmark specific issues, PRs, discussions, releases, or commits from anywhere on GitHub and track them in one calm view across all inbox pages.
 - **Multi-stage thread extraction:** Pulls the exact linked comment or falls back to the issue/PR description, earlier `@mention` comments, and the last 3 timeline updates from GitHub's embedded JSON.

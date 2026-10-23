@@ -213,17 +213,85 @@ test("invalid local server choices cannot become arbitrary endpoints", async () 
 test("summary exposes the exact CommonJS and browser-global API without dependencies", () => {
   assert.equal(globalThis.GitHubSubscriptionSummary, summary);
   assert.deepEqual(Object.keys(summary).sort(), [
-    "DEFAULT_CONTEXT_WINDOW", "DEFAULT_SETTINGS", "KEV_ORIGIN", "MAX_PARALLEL_SUMMARIES",
+    "BRIEFING_VERSION", "DEFAULT_CONTEXT_WINDOW", "DEFAULT_SETTINGS", "KEV_ORIGIN", "MAX_PARALLEL_SUMMARIES",
     "ORIGIN", "LM_STUDIO_ORIGIN", "MLX_ORIGIN", "SPLASH_ORIGIN", "PERMISSION_ORIGIN", "STORAGE_KEY", "SUMMARY_VERSION",
     "contextWindowForModel", "estimateTokens", "listModels", "maxParallelSummaries",
-    "providerForModel", "recommendedModel", "summarize", "triageWithKev", "validateSettings", "validateResult"
+    "providerForModel", "recommendedModel", "summarize", "summarizeBriefing", "triageWithKev", "validateSettings", "validateResult"
   ].sort());
   const browser = {};
   vm.runInNewContext(readFileSync(require.resolve("../summary.js"), "utf8"), browser);
   assert.equal(typeof browser.GitHubSubscriptionSummary.summarize, "function");
+  assert.equal(typeof browser.GitHubSubscriptionSummary.summarizeBriefing, "function");
   assert.equal(browser.GitHubSubscriptionSummary.ORIGIN, "http://127.0.0.1:11434");
   assert.equal(summary.PERMISSION_ORIGIN, "http://127.0.0.1/*");
   assert.equal(summary.STORAGE_KEY, "summaries:v1:settings");
+});
+
+test("summarizeBriefing synthesizes P1 notification summaries into a single <=250-word paragraph", async () => {
+  const longParagraph = Array.from({ length: 260 }, (_, i) => i === 180 ? "decision." : `word${i}`).join(" ");
+  const http = fakeHttp([
+    tags(),
+    jsonResponse({
+      model: MODEL,
+      done: true,
+      done_reason: "stop",
+      message: {
+        role: "assistant",
+        content: JSON.stringify({
+          briefing: "@maya needs your approval on acme/payments#418 before 4pm PT to unblock the billing hotfix, while @liam-staff is waiting on your sanity check in acme/runtime#892."
+        })
+      }
+    }),
+    tags(),
+    jsonResponse({
+      model: MODEL,
+      done: true,
+      done_reason: "stop",
+      message: {
+        role: "assistant",
+        content: JSON.stringify({ briefing: longParagraph })
+      }
+    })
+  ]);
+  const res = await summary.summarizeBriefing({
+    model: MODEL,
+    viewer: "you",
+    items: [
+      {
+        label: "acme/payments#418",
+        title: "Webhook retry storm",
+        author: "maya",
+        role: "VP Product",
+        reason: "mention",
+        score: 92,
+        response: "needs_response",
+        summary: "@maya asked you to approve the dual-key grace window before 4pm PT.",
+        action: "Approve the dual-key grace window.",
+        evidence: "@you please approve before 4pm PT"
+      }
+    ]
+  }, http);
+  assert.match(res.briefing, /@maya needs your approval on acme\/payments#418/);
+  const systemPrompt = JSON.parse(http.calls[1].options.body).messages[0].content;
+  assert.match(systemPrompt, /Get to the Point/);
+  assert.match(systemPrompt, /paulgraham\.com\/talk\.html/);
+  assert.match(systemPrompt, /paulgraham\.com\/useful\.html/);
+
+  const capped = await summary.summarizeBriefing({
+    model: MODEL,
+    viewer: "you",
+    items: [
+      {
+        label: "acme/payments#418",
+        title: "Webhook retry storm",
+        author: "maya",
+        score: 92,
+        response: "needs_response",
+        summary: "@maya asked you to approve the dual-key grace window."
+      }
+    ]
+  }, http);
+  assert.ok(capped.briefing.split(/\s+/).length <= 250);
 });
 
 test("triageWithKev queries local /v1/systemone and enforces viewer-mention eligibility", async () => {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Signalbox — GitHub Notifications Triage & AI Summaries",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "minimum_chrome_version": "120",
   "description": "Turn GitHub's notification firehose into pure signal with local AI summaries, Priority triage, Subscriptions, and one-click sweep.",
   "permissions": ["storage", "activeTab"],

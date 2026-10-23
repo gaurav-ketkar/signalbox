@@ -10,6 +10,8 @@
   const FILTER_QUERY = "subscriptions:only";
   const PRIORITY_HASH = "#priority";
   const PRIORITY_QUERY = "priority:only";
+  const TODAY_HASH = "#today";
+  const TODAY_QUERY = "today:only";
   const PRIORITY_THRESHOLD = 35;
   const PRIORITY_RULES_STORAGE_KEY = "priority:v1:rules";
   const DEFAULT_PRIORITY_RULES = Object.freeze({
@@ -186,6 +188,16 @@
     const url = githubUrl(value);
     return isNotifications(value) && (url.hash === PRIORITY_HASH ||
       isPriorityQuery(url.searchParams.get("query")));
+  }
+
+  function isTodayQuery(value) {
+    return typeof value === "string" && value.trim().toLowerCase() === TODAY_QUERY;
+  }
+
+  function isTodayView(value) {
+    const url = githubUrl(value);
+    return isNotifications(value) && (url.hash === TODAY_HASH ||
+      isTodayQuery(url.searchParams.get("query")));
   }
 
   function scorePriority(item, {
@@ -395,6 +407,8 @@
     FILTER_QUERY,
     PRIORITY_HASH,
     PRIORITY_QUERY,
+    TODAY_HASH,
+    TODAY_QUERY,
     PRIORITY_THRESHOLD,
     PRIORITY_RULES_STORAGE_KEY,
     DEFAULT_PRIORITY_RULES,
@@ -413,6 +427,8 @@
     isSubscriptionView,
     isPriorityQuery,
     isPriorityView,
+    isTodayQuery,
+    isTodayView,
     validatePriorityRules,
     scorePriority,
     classifySweep,

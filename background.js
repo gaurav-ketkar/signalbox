@@ -204,9 +204,9 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     received = true;
-    if (!["models", "summarize", "triage", "kev-status"].includes(message?.type) ||
+    if (!["models", "summarize", "briefing", "triage", "kev-status"].includes(message?.type) ||
         (message.type === "models" && message.provider !== undefined && !["ollama", "lmstudio", "mlx", "splash"].includes(message.provider)) ||
-        (["summarize", "triage", "kev-status"].includes(message.type) && page !== "notifications")) {
+        (["summarize", "briefing", "triage", "kev-status"].includes(message.type) && page !== "notifications")) {
       send({ type: "error", message: "Open AI settings or GitHub notifications to use local summaries." });
       return;
     }
@@ -214,6 +214,14 @@ chrome.runtime.onConnect.addListener((port) => {
       message.type === "triage" ? (core.summaryTarget || core.commentTarget)(message.href) : null;
     if (["summarize", "triage"].includes(message.type) && !target) {
       send({ type: "error", message: "This notification has no supported exact comment link to summarize." });
+      return;
+    }
+    if (message.type === "briefing" && (
+      typeof message.model !== "string" || !message.model || message.model.length > 200 ||
+      !Array.isArray(message.items) || !message.items.length || message.items.length > 30 ||
+      (message.viewer !== undefined && (typeof message.viewer !== "string" || (message.viewer && !core.normalizeLogin(message.viewer))))
+    )) {
+      send({ type: "error", message: "The Today briefing request is invalid or has no P1 notification summaries." });
       return;
     }
     if (message.type === "triage" && (
@@ -283,6 +291,16 @@ chrome.runtime.onConnect.addListener((port) => {
           }
         } else if (message.type === "triage") {
           value = summary.triageWithKev ? await summary.triageWithKev(message, { signal: controller.signal }) : null;
+        } else if (message.type === "briefing") {
+          const settings = await store.getSummarySettings();
+          controller.signal.throwIfAborted();
+          if (!settings.model || message.model !== settings.model) {
+            throw new Error("The local model setting changed. Open AI settings or retry the briefing.");
+          }
+          value = await summary.summarizeBriefing(message, {
+            signal: controller.signal,
+            onProgress: (text) => send({ type: "progress", message: text })
+          });
         } else {
           const [settings, subscriptions] = await Promise.all([store.getSummarySettings(), store.list()]);
           controller.signal.throwIfAborted();

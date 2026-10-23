@@ -4,9 +4,12 @@ This document covers the architecture, filtering behavior, local AI summarizatio
 
 ---
 
-## 1. Priority Filter (`#priority`) & Scoring
+## 1. Today View (`#today`) & Priority Filter (`#priority`)
 
-Signalbox adds a **Priority** view (`https://github.com/notifications#priority` or `priority:only`) that scores every inbox notification on a **0–100 scale** (`PRIORITY_THRESHOLD = 42`):
+Signalbox places **Today**, **Priority**, and **Subscriptions** at the very top of your GitHub notifications **Filters** sidebar:
+
+- **Today (`#today` / `today:only` — Experimental):** Filters your inbox to **P1 Priority** notifications (`score >= 70`), automatically summarizes any un-summarized P1 threads, and writes a single-paragraph (<250-word) **Morning Executive Briefing** at the top of the page above the P1 rows. The synthesis prompt is built on Joel Schwartzberg's *Get to the Point* (lead with the point, pass the "I believe that" test) and Paul Graham's *Write Like You Talk* (`paulgraham.com/talk.html`) and *How to Write Usefully* (`paulgraham.com/useful.html`).
+- **Priority (`#priority` / `priority:only`):** Scores every inbox notification on a **0–100 scale** (`PRIORITY_THRESHOLD = 35`):
 
 - **Direct Ask & Signal (0–45 pts):**
   - Explicit `assigned`, `review-requested`, or direct `@mention` reasons, or a 5-head local **Kev** triage score (`http://127.0.0.1:8009/v1/systemone` evaluating `direct_ask`, `blocker_or_decision`, `resolved_or_stale`, `response`, and `urgency`).
@@ -49,7 +52,7 @@ When you click **Preview linked comment** or **Summarize**, Signalbox fetches th
    - The latest 3 timeline comments
 3. **Plain-text safety:** All previews and summaries are rendered strictly via `textContent` (never `innerHTML`). Long sources are capped at 12,000 characters and badged with a compact **`Partial`** pill.
 
-> **Note on read state:** Fetching an item page on GitHub using your active session may mark that notification as read on GitHub. Signalbox warns before fetching and never calls Mark Read, Done, Subscribe, or Unsubscribe APIs unless you explicitly click a Quick Sweep button.
+> **Preserving unread state:** Fetching an item page on GitHub using your active session can mark that notification as read on GitHub. Whenever Signalbox fetches an unread notification for a summary or preview, it immediately restores the notification's unread state via GitHub's same-origin `/notifications/beta/unmark` endpoint so unread threads stay unread until you actually open them.
 
 ---
 

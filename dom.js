@@ -78,11 +78,17 @@
         row.ownerDocument?.querySelector("form[action='/notifications/beta/archive'] input[name='authenticity_token']")?.value || "",
         300
       );
+      const unmarkToken = core.cleanText(
+        row.querySelector("form[action='/notifications/beta/unmark'] input[name='authenticity_token']")?.value ||
+        row.ownerDocument?.querySelector("form[action='/notifications/beta/unmark'] input[name='authenticity_token']")?.value || "",
+        300
+      );
       return {
         ...item,
         href,
         notificationId,
         archiveToken,
+        unmarkToken,
         title: core.cleanText(titleNode?.textContent || anchor.textContent, 1024) || item.label,
         ...readReason(row),
         participants: readParticipants(row),
