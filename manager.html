@@ -22,12 +22,18 @@ FORM: A compact list editor extending GitHub's established interface. No concept
   <body>
     <main>
       <header class="page-header">
-        <div>
-          <span class="field-label">Signalbox</span>
+        <div class="header-titles">
           <h1>Subscriptions</h1>
-          <p class="intro">Your GitHub inbox, narrowed to pure signal.</p>
+          <p class="intro">Signalbox — your GitHub inbox, narrowed to pure signal.</p>
         </div>
-        <a class="inbox-link" href="https://github.com/notifications#subscriptions" target="_blank" rel="noopener noreferrer">Open filtered inbox <span aria-hidden="true">&rarr;</span></a>
+        <div class="header-actions">
+          <nav class="section-nav" aria-label="Settings sections">
+            <a href="#saved-heading">List</a>
+            <a href="#summaries-heading">AI Models</a>
+            <a href="#priority-rules-heading">Priority Rules</a>
+          </nav>
+          <a class="inbox-link" href="https://github.com/notifications#subscriptions" target="_blank" rel="noopener noreferrer">Open filtered inbox <span aria-hidden="true">&rarr;</span></a>
+        </div>
       </header>
 
       <section id="current-page" class="current-page" aria-label="Current GitHub item" hidden>
@@ -38,146 +44,180 @@ FORM: A compact list editor extending GitHub's established interface. No concept
         <button id="save-current" type="button">Add this page</button>
       </section>
 
-      <form id="add-form">
-        <label for="links">Add GitHub links</label>
-        <textarea id="links" name="links" rows="3" maxlength="100000" placeholder="https://github.com/owner/repo/issues/123" aria-describedby="links-help" spellcheck="false" required></textarea>
-        <p id="links-help" class="help">One link per line. <code>owner/repo#123</code> also works for issues and pull requests.</p>
-        <div class="form-actions">
-          <button id="add-button" class="primary" type="submit" disabled>Add subscriptions</button>
-          <span class="help">Stored only in this Chrome profile.</span>
+      <section class="workspace-grid" aria-label="Subscriptions and saved items">
+        <div class="workspace-add">
+          <form id="add-form">
+            <label for="links">Add GitHub links</label>
+            <textarea id="links" name="links" rows="3" maxlength="100000" placeholder="https://github.com/owner/repo/issues/123&#10;owner/repo#456" aria-describedby="links-help" spellcheck="false" required></textarea>
+            <p id="links-help" class="help">One link per line. Issues, pull requests, discussions, releases, and commits.</p>
+            <div class="form-actions">
+              <button id="add-button" class="primary" type="submit" disabled>Add subscriptions</button>
+              <span class="help">Stored in this Chrome profile.</span>
+            </div>
+          </form>
+          <p id="error" class="error" role="alert" hidden></p>
+          <p id="status" class="status" role="status" aria-live="polite">Loading your list...</p>
         </div>
-      </form>
 
-      <p id="error" class="error" role="alert" hidden></p>
-      <p id="status" class="status" role="status" aria-live="polite">Loading your list...</p>
-
-      <section class="saved-section" aria-labelledby="saved-heading">
-        <div class="list-header">
-          <h2 id="saved-heading">Your list <span id="saved-count" class="count">0</span></h2>
-          <button id="export" class="text-button" type="button" disabled>Export links</button>
-        </div>
-        <label class="sr-only" for="search">Filter saved subscriptions</label>
-        <input id="search" type="search" placeholder="Find a saved item" autocomplete="off" hidden>
-        <ul id="saved-list" class="saved-list" aria-label="Saved subscriptions"></ul>
-        <div id="empty" class="empty" hidden>
-          <h3>No subscriptions yet</h3>
-          <p>Add links above, or use the bookmark button on a GitHub item or notification.</p>
-        </div>
-        <p id="no-results" class="help" hidden>No saved items match this search.</p>
-      </section>
-
-      <section id="priority-rules" class="saved-section" aria-labelledby="priority-rules-heading">
-        <h2 id="priority-rules-heading">Priority filter rules</h2>
-        <p class="help">Configure your organizational contacts and core repositories for the Priority filter. Stored locally in this Chrome profile (never sent externally).</p>
-        <form id="priority-rules-form">
-          <label for="priority-rules-json">Priority contacts &amp; repositories (JSON)</label>
-          <textarea id="priority-rules-json" rows="5" spellcheck="false" placeholder='{"contacts":{"octocat":{"points":30,"tier":1,"role":"Manager"}},"coreRepos":["owner/repo"],"adjacentRepos":[]}'></textarea>
-          <div class="form-actions">
-            <button id="save-priority-rules" type="submit">Save priority rules</button>
+        <section class="saved-section saved-list-panel" aria-labelledby="saved-heading">
+          <div class="list-header">
+            <h2 id="saved-heading">Your list <span id="saved-count" class="count">0</span></h2>
+            <button id="export" class="text-button" type="button" disabled>Export links</button>
           </div>
-        </form>
-        <p id="priority-rules-error" class="error" role="alert" hidden></p>
-        <p id="priority-rules-status" class="status" role="status" aria-live="polite"></p>
+          <label class="sr-only" for="search">Filter saved subscriptions</label>
+          <input id="search" type="search" placeholder="Find a saved item" autocomplete="off" hidden>
+          <ul id="saved-list" class="saved-list" aria-label="Saved subscriptions"></ul>
+          <div id="empty" class="empty" hidden>
+            <h3>No subscriptions yet</h3>
+            <p>Add links on the left, or click the bookmark icon on any GitHub issue, PR, or notification.</p>
+          </div>
+          <p id="no-results" class="help" hidden>No saved items match this search.</p>
+        </section>
       </section>
 
       <section id="summaries" class="saved-section" aria-labelledby="summaries-heading">
-        <h2 id="summaries-heading">AI summaries (Local &amp; Cloud)</h2>
-        <p class="help">Keep costs at $0 with a local model on this Mac (Splash, LM Studio, Ollama, or MLX), or connect GitHub Copilot, OpenAI, Anthropic, or Google Gemini—and mix and match between row summaries and your Today executive briefing.</p>
-        <label class="server-label" for="summary-server">Row summaries provider</label>
-        <select id="summary-server">
-          <optgroup label="Local on this Mac ($0 · 100% On-Device)">
-            <option value="splash">Splash (default) - 127.0.0.1:8000</option>
-            <option value="lmstudio">LM Studio - 127.0.0.1:1234</option>
-            <option value="ollama">Ollama - 127.0.0.1:11434</option>
-            <option value="mlx">Local MLX - 127.0.0.1:8080</option>
-          </optgroup>
-          <optgroup label="Cloud Providers (Subscription or API Key)">
-            <option value="copilot">GitHub Copilot - api.githubcopilot.com</option>
-            <option value="openai">OpenAI - api.openai.com</option>
-            <option value="anthropic">Anthropic - api.anthropic.com</option>
-            <option value="gemini">Google Gemini - generativelanguage.googleapis.com</option>
-          </optgroup>
-        </select>
-        <div id="summary-api-key-group" class="api-key-group" hidden>
-          <label class="server-label" for="summary-api-key" id="summary-api-key-label">API token</label>
-          <input id="summary-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your token or API key">
-          <p id="summary-api-key-help" class="help">Stored only in this Chrome profile (never exported).</p>
+        <div class="section-intro">
+          <h2 id="summaries-heading">AI summaries &amp; model routing</h2>
+          <p class="help">Use a $0 local model on this Mac (Splash, LM Studio, Ollama, or MLX) or connect GitHub Copilot, OpenAI, Anthropic, or Gemini. Route row summaries and your Today executive briefing independently.</p>
         </div>
-        <div class="form-actions">
-          <button id="connect-models" type="button">Connect to local server</button>
-        </div>
-        <form id="summary-form">
-          <label for="summary-model">Row summaries model</label>
-          <select id="summary-model" aria-describedby="summary-help" disabled>
-            <option value="">Connect to list installed models</option>
-          </select>
-          <label class="checkbox-label" for="summary-automatic">
-            <input id="summary-automatic" type="checkbox" disabled>
-            Summarize automatically when I open a notifications view
-          </label>
-          <label class="checkbox-label" for="summary-manual-only">
-            <input id="summary-manual-only" type="checkbox" disabled>
-            Manual row clicks only (disable bulk "Summarize comments" to keep cloud costs near zero)
-          </label>
 
-          <div class="briefing-routing-box">
-            <h3>Today's Executive Briefing model (Optional override)</h3>
-            <p class="help">The Today briefing runs once per day on already-distilled P1 summaries (~1,000 tokens). You can keep row summaries on a $0 local model and route only Today's synthesis to a frontier model.</p>
-            <label class="server-label" for="briefing-server">Today briefing provider</label>
-            <select id="briefing-server">
-              <option value="">Same as row summaries model (default)</option>
-              <optgroup label="Local on this Mac ($0)">
-                <option value="splash">Splash - 127.0.0.1:8000</option>
-                <option value="lmstudio">LM Studio - 127.0.0.1:1234</option>
-                <option value="ollama">Ollama - 127.0.0.1:11434</option>
-                <option value="mlx">Local MLX - 127.0.0.1:8080</option>
-              </optgroup>
-              <optgroup label="Cloud Frontier Models">
-                <option value="copilot">GitHub Copilot - api.githubcopilot.com</option>
-                <option value="openai">OpenAI - api.openai.com</option>
-                <option value="anthropic">Anthropic - api.anthropic.com</option>
-                <option value="gemini">Google Gemini - generativelanguage.googleapis.com</option>
-              </optgroup>
-            </select>
-            <div id="briefing-override-controls" hidden>
-              <div id="briefing-api-key-group" class="api-key-group" hidden>
-                <label class="server-label" for="briefing-api-key" id="briefing-api-key-label">Briefing provider API token</label>
-                <input id="briefing-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your token or API key">
+        <form id="summary-form">
+          <div class="model-slots-grid">
+            <div class="model-slot">
+              <div class="slot-header">
+                <h3>Row summaries</h3>
+                <span class="slot-badge">Inbox · Priority · Subscriptions</span>
               </div>
-              <div class="form-actions">
-                <button id="connect-briefing-models" type="button">Connect briefing provider</button>
+              <p class="help">Summarizes individual notification threads inline and flags direct asks.</p>
+
+              <label class="server-label" for="summary-server">Provider</label>
+              <div class="connect-row">
+                <select id="summary-server">
+                  <optgroup label="Local on this Mac ($0 · 100% On-Device)">
+                    <option value="splash">Splash (default · :8000)</option>
+                    <option value="lmstudio">LM Studio (:1234)</option>
+                    <option value="ollama">Ollama (:11434)</option>
+                    <option value="mlx">Local MLX (:8080)</option>
+                  </optgroup>
+                  <optgroup label="Cloud Providers (Subscription or API Key)">
+                    <option value="copilot">GitHub Copilot</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="gemini">Google Gemini</option>
+                  </optgroup>
+                </select>
+                <button id="connect-models" type="button">Connect to local server</button>
               </div>
-              <label class="server-label" for="briefing-model">Today briefing model</label>
-              <select id="briefing-model" disabled>
-                <option value="">Connect to list available models</option>
+
+              <div id="summary-api-key-group" class="api-key-group" hidden>
+                <label class="server-label" for="summary-api-key" id="summary-api-key-label">API token</label>
+                <input id="summary-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your token or API key">
+                <p id="summary-api-key-help" class="help">Stored only in this Chrome profile (never exported).</p>
+              </div>
+
+              <label class="server-label" for="summary-model">Model</label>
+              <select id="summary-model" aria-describedby="summary-help" disabled>
+                <option value="">Connect to list installed models</option>
               </select>
+            </div>
+
+            <div class="model-slot briefing-routing-box">
+              <div class="slot-header">
+                <h3>Today's Executive Briefing</h3>
+                <span class="slot-badge">Once/day · P1 synthesis</span>
+              </div>
+              <p class="help">Synthesizes P1 summaries into one morning paragraph (~1,000 tokens/day).</p>
+
+              <label class="server-label" for="briefing-server">Provider override</label>
+              <select id="briefing-server">
+                <option value="">Same as row summaries model (default)</option>
+                <optgroup label="Local on this Mac ($0)">
+                  <option value="splash">Splash (:8000)</option>
+                  <option value="lmstudio">LM Studio (:1234)</option>
+                  <option value="ollama">Ollama (:11434)</option>
+                  <option value="mlx">Local MLX (:8080)</option>
+                </optgroup>
+                <optgroup label="Cloud Frontier Models">
+                  <option value="copilot">GitHub Copilot</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="gemini">Google Gemini</option>
+                </optgroup>
+              </select>
+
+              <div id="briefing-override-controls" hidden>
+                <div id="briefing-api-key-group" class="api-key-group" hidden>
+                  <label class="server-label" for="briefing-api-key" id="briefing-api-key-label">Briefing provider API token</label>
+                  <input id="briefing-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your token or API key">
+                </div>
+                <label class="server-label" for="briefing-model">Briefing model</label>
+                <div class="connect-row">
+                  <select id="briefing-model" disabled>
+                    <option value="">Connect to list available models</option>
+                  </select>
+                  <button id="connect-briefing-models" type="button">Connect briefing provider</button>
+                </div>
+              </div>
             </div>
           </div>
 
-          <p id="summary-help" class="help">Unread notifications that get summarized are automatically restored to unread on GitHub. Automatic summaries are off by default.</p>
-          <div class="form-actions">
-            <button id="save-summary-settings" type="submit" disabled>Save summary settings</button>
-            <button id="disable-summaries" class="text-button" type="button" hidden>Turn off summaries</button>
+          <div class="summary-behavior-group">
+            <label class="checkbox-label" for="summary-automatic">
+              <input id="summary-automatic" type="checkbox" disabled>
+              <span><strong>Summarize automatically</strong> when I open a notifications view</span>
+            </label>
+            <label class="checkbox-label" for="summary-manual-only">
+              <input id="summary-manual-only" type="checkbox" disabled>
+              <span><strong>Manual row clicks only</strong> — hide bulk "Summarize comments" to keep cloud costs near zero</span>
+            </label>
+          </div>
+
+          <div class="summary-save-bar">
+            <div class="form-actions">
+              <button id="save-summary-settings" class="primary" type="submit" disabled>Save summary settings</button>
+              <button id="disable-summaries" class="text-button" type="button" hidden>Turn off summaries</button>
+            </div>
+            <p id="summary-help" class="help">Unread notifications are automatically restored to unread after summarization. Up to 200 summaries are cached locally for 30 days.</p>
           </div>
         </form>
+
         <p id="summary-error" class="error" role="alert" hidden></p>
         <p id="summary-status" class="status" role="status" aria-live="polite"></p>
-        <p class="help">AI can miss details. "Needs your response" means this linked comment explicitly asks you to act; a later reply may already have answered it. Open the original to check.</p>
-        <h3>Saved locally</h3>
-        <p class="help">Summaries, short evidence quotes, source metadata, and caught-up markers stay in this Chrome profile, separately for each GitHub account. Full comment text stays in memory. None of this is included in link exports.</p>
-        <p class="help">Up to 200 summaries are kept, with a 30-day reuse limit. Unchanged comments reuse their summary. A saved snapshot shows when its source was checked; use Recheck comment for a fresh comparison. Rechecking may mark the notification read.</p>
-        <p id="local-data-counts" class="help" role="status">Loading saved data...</p>
-        <div class="form-actions">
-          <button id="clear-summary-cache" class="text-button" type="button">Clear saved summaries</button>
-          <button id="clear-review-state" class="text-button" type="button">Reset caught-up state</button>
+
+        <div class="local-storage-bar">
+          <div>
+            <h3>Local cache &amp; review state</h3>
+            <p id="local-data-counts" class="help" role="status">Loading saved data...</p>
+          </div>
+          <div class="form-actions">
+            <button id="clear-summary-cache" class="text-button" type="button">Clear saved summaries</button>
+            <button id="clear-review-state" class="text-button" type="button">Reset caught-up state</button>
+          </div>
         </div>
-        <p class="help">These controls clear that data for all GitHub accounts in this Chrome profile. Subscriptions and model settings stay unchanged.</p>
         <p id="local-data-error" class="error" role="alert" hidden></p>
         <p id="local-data-status" class="status" role="status" aria-live="polite"></p>
       </section>
 
+      <section id="priority-rules" class="saved-section" aria-labelledby="priority-rules-heading">
+        <div class="priority-rules-layout">
+          <div class="section-intro">
+            <h2 id="priority-rules-heading">Priority filter rules</h2>
+            <p class="help">Weight notifications from key teammates and core repositories in your <strong>Priority</strong> and <strong>Today</strong> views. Stored only in this Chrome profile.</p>
+          </div>
+          <form id="priority-rules-form">
+            <label for="priority-rules-json">Priority contacts &amp; repositories (JSON)</label>
+            <textarea id="priority-rules-json" rows="5" spellcheck="false" placeholder='{"contacts":{"octocat":{"points":30,"tier":1,"role":"Manager"}},"coreRepos":["owner/repo"],"adjacentRepos":[]}'></textarea>
+            <div class="form-actions">
+              <button id="save-priority-rules" type="submit">Save priority rules</button>
+            </div>
+          </form>
+        </div>
+        <p id="priority-rules-error" class="error" role="alert" hidden></p>
+        <p id="priority-rules-status" class="status" role="status" aria-live="polite"></p>
+      </section>
+
       <footer>
-        <p>This list filters existing inbox notifications. It does not change GitHub's Watch or Unsubscribe settings, or create new notifications.</p>
+        <p>Filters existing GitHub inbox notifications locally without changing Watch or Subscription settings.</p>
         <button id="open-manager" class="text-button" type="button" hidden>Manage in a full tab</button>
       </footer>
     </main>
