@@ -283,6 +283,12 @@ beforeEach(async () => {
         role: "assistant",
         content: state.content ?? JSON.stringify(isBriefing ? (state.briefingResult || defaultBriefing) : state.result)
       };
+      if (copilot && chat && state.failCopilotChat) {
+        return new Response(JSON.stringify({ error: { message: "Service unavailable" } }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
       return new Response(JSON.stringify(chat ? (lmStudio || splash || copilot ?
         { choices: [{ finish_reason: "stop", message }] } :
         { done: true, done_reason: "stop", message }) :
@@ -1407,7 +1413,8 @@ test("supports two-slot hybrid routing (local Splash for row summaries + GitHub 
   await manager.locator("#briefing-server").selectOption("copilot");
   await manager.locator("#briefing-api-key").fill("gho_copilot_test_token");
   await manager.locator("#connect-briefing-models").click();
-  await eventually(async () => (await manager.locator("#briefing-model").inputValue()) === "copilot:claude-opus-5.5", "GitHub Copilot briefing model did not connect");
+  await eventually(async () => (await manager.locator("#briefing-model").inputValue()) === "copilot:auto", "GitHub Copilot briefing model did not connect");
+  await manager.locator("#briefing-model").selectOption("copilot:claude-opus-5.5");
   await manager.locator("#save-summary-settings").click();
   await eventually(async () => (await manager.locator("#summary-status").textContent()).includes("Manual row clicks only is on"), "Hybrid settings did not save");
 
@@ -1423,10 +1430,23 @@ test("supports two-slot hybrid routing (local Splash for row summaries + GitHub 
   await eventually(async () => (await page.locator(".gns-today-paragraph").isVisible()) &&
     (await page.locator(".gns-today-paragraph").textContent()).includes("acme/console#203"),
     "Hybrid Today briefing did not finish");
-  assert.match(await page.locator(".gns-today-meta").textContent(), /copilot:claude-opus-5\.5/);
+  assert.match(await page.locator(".gns-today-meta").textContent(), /Cloud AI \(copilot:claude-opus-5\.5\)/);
   const calls = (await aiState()).calls;
   assert.ok(calls.some((c) => c.url === "http://127.0.0.1:8000/v1/chat/completions" && c.body?.model === "mlx-community/Qwen3.8-27B-4bit"), "Expected P1 row summary to use local Splash");
   assert.ok(calls.some((c) => c.url === "https://api.githubcopilot.com/chat/completions" && c.body?.model === "claude-opus-5.5"), "Expected Today briefing to use GitHub Copilot claude-opus-5.5");
+
+  // If the cloud model fails (e.g. HTTP 503), Signalbox automatically falls back to local Splash and shows a visible fallback warning
+  await worker.evaluate(async (key) => {
+    await chrome.storage.local.set({ [key]: { model: "copilot:claude-opus-5.5", automatic: false } });
+    globalThis.gnsTestAI.failCopilotChat = true;
+  }, summaries.STORAGE_KEY);
+  await page.goto("https://github.com/notifications?query=reason%3Amention");
+  await page.locator("[data-gns-native-toolbar]").waitFor();
+  await page.getByRole("button", { name: "Summarize comments", exact: true }).click();
+  await eventually(async () => (await page.locator(".notifications-list-item .gns-ai-summary[data-state='done']").count()) === 1,
+    "Cloud failure did not fall back to local model");
+  assert.equal(await page.locator(".notifications-list-item .gns-ai-fallback-pill").isVisible(), true);
+  assert.equal(await page.locator(".notifications-list-item .gns-ai-fallback-pill").textContent(), "Local fallback");
   assert.deepEqual(pageErrors, []);
 });
 

@@ -285,6 +285,38 @@ test("supports GitHub Copilot, OpenAI, Anthropic, and Gemini cloud providers and
   assert.equal(copilotHttp.calls[0].options.headers["Copilot-Integration-Id"], "vscode-chat");
   assert.equal(copilotHttp.calls[1].url, "https://api.githubcopilot.com/chat/completions");
 
+  // GitHub Copilot /responses endpoint (GPT-5/6 models) + copilot:auto routing
+  const copilotResponsesHttp = fakeHttp([
+    jsonResponse({
+      data: [
+        {
+          id: "gpt-5.4-nano",
+          name: "GPT-5.4 Nano",
+          object: "model",
+          model_picker_enabled: true,
+          supported_endpoints: ["/responses"],
+          capabilities: { type: "chat", limits: { max_context_window_tokens: 400000 } },
+          policy: { state: "enabled" }
+        }
+      ]
+    }),
+    jsonResponse({
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: JSON.stringify(OUTPUT) }]
+      }]
+    })
+  ]);
+  const copilotAutoOut = await summary.summarize(
+    { ...SOURCE, model: "copilot:auto" },
+    { ...copilotResponsesHttp, apiKey: "gho_test_token" }
+  );
+  assert.deepEqual(copilotAutoOut, OUTPUT);
+  assert.equal(copilotResponsesHttp.calls[1].url, "https://api.githubcopilot.com/responses");
+  assert.equal(JSON.parse(copilotResponsesHttp.calls[1].options.body).model, "gpt-5.4-nano");
+
   // Anthropic provider (/v1/models + /v1/messages)
   const anthropicHttp = fakeHttp([
     jsonResponse({ data: [{ id: "claude-sonnet-4-5", display_name: "Claude Sonnet 4.5" }] }),

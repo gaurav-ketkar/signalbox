@@ -144,6 +144,24 @@ function drain() {
   }
 }
 
+async function findLocalFallbackModel(signal, preferredModel = "") {
+  if (preferredModel && !summary.isCloudProvider?.(summary.providerForModel?.(preferredModel))) {
+    return preferredModel;
+  }
+  const providers = summary.LOCAL_PROVIDERS || ["splash", "lmstudio", "ollama", "mlx"];
+  for (const provider of providers) {
+    signal?.throwIfAborted();
+    try {
+      const list = await summary.listModels({ signal, provider });
+      const rec = summary.recommendedModel ? summary.recommendedModel(list) : list?.[0]?.id;
+      if (rec) return rec;
+    } catch {
+      // Try next local engine.
+    }
+  }
+  return "";
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "gns:local-summary") return;
   const page = senderPage(port.sender);
@@ -310,13 +328,29 @@ chrome.runtime.onConnect.addListener((port) => {
           controller.signal.throwIfAborted();
           const expectedBriefingModel = settings.briefingModel || settings.model;
           if (!expectedBriefingModel || (message.model !== expectedBriefingModel && message.model !== settings.model)) {
-            throw new Error("The local model setting changed. Open AI settings or retry the briefing.");
+            throw new Error("The AI model setting changed. Open AI settings or retry the briefing.");
           }
-          value = await summary.summarizeBriefing(message, {
-            signal: controller.signal,
-            apiKey,
-            onProgress: (text) => send({ type: "progress", message: text })
-          });
+          try {
+            value = await summary.summarizeBriefing(message, {
+              signal: controller.signal,
+              apiKey,
+              onProgress: (text) => send({ type: "progress", message: text })
+            });
+          } catch (cloudError) {
+            if (controller.signal.aborted || !summary.isCloudProvider?.(activeProvider)) throw cloudError;
+            const localFallback = await findLocalFallbackModel(controller.signal, settings.model);
+            if (!localFallback) throw cloudError;
+            send({ type: "progress", message: `Cloud model unavailable; falling back to local ${localFallback}...` });
+            const fallbackResult = await summary.summarizeBriefing({ ...message, model: localFallback }, {
+              signal: controller.signal,
+              onProgress: (text) => send({ type: "progress", message: text })
+            });
+            value = {
+              ...fallbackResult,
+              usedModel: localFallback,
+              fallbackWarning: `Cloud model (${message.model}) failed (${core.cleanText(cloudError.message, 140)}) — generated locally with ${localFallback}.`
+            };
+          }
         } else {
           const [settings, subscriptions] = await Promise.all([store.getSummarySettings(), store.list()]);
           controller.signal.throwIfAborted();
@@ -341,9 +375,28 @@ chrome.runtime.onConnect.addListener((port) => {
             await writeState(() => store.deleteCachedSummary(viewer, source.href));
           }
           const reused = cached?.fingerprint === fingerprint;
-          const result = reused ? cached.result : await summary.summarize(source, {
-            signal: controller.signal, apiKey, onProgress: (text) => send({ type: "progress", message: text })
-          });
+          let result;
+          let fallbackWarning = "";
+          let usedModel = settings.model;
+          if (reused) {
+            result = cached.result;
+          } else {
+            try {
+              result = await summary.summarize(source, {
+                signal: controller.signal, apiKey, onProgress: (text) => send({ type: "progress", message: text })
+              });
+            } catch (cloudError) {
+              if (controller.signal.aborted || !summary.isCloudProvider?.(activeProvider)) throw cloudError;
+              const localFallback = await findLocalFallbackModel(controller.signal);
+              if (!localFallback) throw cloudError;
+              send({ type: "progress", message: `Cloud model unavailable; falling back to local ${localFallback}...` });
+              result = await summary.summarize({ ...source, model: localFallback }, {
+                signal: controller.signal, onProgress: (text) => send({ type: "progress", message: text })
+              });
+              usedModel = localFallback;
+              fallbackWarning = `Cloud model (${settings.model}) was unavailable (${core.cleanText(cloudError.message, 120)}) — summarized locally with ${localFallback}.`;
+            }
+          }
           controller.signal.throwIfAborted();
           const now = Date.now();
           const record = {
@@ -369,7 +422,13 @@ chrome.runtime.onConnect.addListener((port) => {
               }
             });
           }
-          value = { ...record, reused, persisted: !!viewer };
+          value = {
+            ...record,
+            reused,
+            persisted: !!viewer,
+            ...(usedModel !== settings.model ? { usedModel } : {}),
+            ...(fallbackWarning ? { fallbackWarning } : {})
+          };
         }
         controller.signal.throwIfAborted();
         send({ type: "result", value });

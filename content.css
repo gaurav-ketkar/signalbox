@@ -645,7 +645,8 @@
   color: var(--gns-accent);
 }
 
-.gns-ai-truncated-pill {
+.gns-ai-truncated-pill,
+.gns-ai-fallback-pill {
   display: inline-block;
   margin-right: 6px;
   padding: 0 6px;
@@ -658,6 +659,23 @@
   line-height: 16px;
   white-space: nowrap;
   vertical-align: 1px;
+}
+
+.gns-ai-fallback-pill {
+  border-color: var(--gns-attention);
+  color: var(--gns-attention);
+  font-weight: 600;
+}
+
+.gns-today-fallback {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--gns-attention);
+  border-radius: 6px;
+  background: var(--gns-bg);
+  color: var(--gns-attention);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .gns-ai-status {

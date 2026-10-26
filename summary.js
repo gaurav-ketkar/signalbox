@@ -182,8 +182,9 @@
       }
     });
     return eligible.find((model) => model.id === "gemma4:12b-it-qat")?.id ||
+      eligible.find((model) => model.id === "copilot:auto")?.id ||
       eligible.find((model) => model.id === "copilot:claude-sonnet-5.5")?.id ||
-      eligible.find((model) => model.id === "copilot:openai/gpt-4.1-mini")?.id ||
+      eligible.find((model) => model.id === "copilot:gpt-5.4-nano")?.id ||
       eligible.find((model) => model.id === "copilot:gemini-3.8-flash")?.id ||
       eligible.filter((model) => model.loaded).sort(compareModels)[0]?.id ||
       eligible.sort(compareModels)[0]?.id || "";
@@ -290,13 +291,17 @@
     }
     if (isCloudProvider(provider)) {
       if (!isObject(entry) || typeof entry.id !== "string" || !entry.id.trim()) return null;
+      let endpoint = "";
       if (provider === "copilot") {
         if (entry.model_picker_enabled === false) return null;
         if (entry.policy && entry.policy.state && entry.policy.state !== "enabled") return null;
-        if (Array.isArray(entry.supported_endpoints) && !entry.supported_endpoints.includes("/chat/completions")) return null;
-        const isChat = entry.capabilities?.type === "chat" ||
-          (Array.isArray(entry.supported_endpoints) && entry.supported_endpoints.includes("/chat/completions")) ||
-          entry.capabilities === undefined;
+        const endpoints = Array.isArray(entry.supported_endpoints) ? entry.supported_endpoints : null;
+        if (endpoints) {
+          if (endpoints.includes("/chat/completions")) endpoint = "/chat/completions";
+          else if (endpoints.includes("/responses")) endpoint = "/responses";
+          else return null;
+        }
+        const isChat = entry.capabilities?.type === "chat" || Boolean(endpoint) || entry.capabilities === undefined;
         if (!isChat) return null;
       }
       const rawId = provider === "gemini" ? entry.id.replace(/^models\//, "") : entry.id.trim();
@@ -313,6 +318,7 @@
         id,
         size: Number.MAX_SAFE_INTEGER,
         loaded: true,
+        ...(endpoint ? { endpoint } : {}),
         ...(typeof entry.name === "string" && entry.name.trim() ? { label: entry.name.trim() } :
           typeof entry.display_name === "string" && entry.display_name.trim() ? { label: entry.display_name.trim() } : {}),
         ...(contextWindow ? { contextWindow } : {})
@@ -577,6 +583,15 @@
       const model = localModel(entry, provider);
       if (model && (!models.has(model.id) || model.size < models.get(model.id).size)) models.set(model.id, model);
     }
+    if (provider === "copilot" && models.size > 0 && !models.has("copilot:auto")) {
+      models.set("copilot:auto", {
+        id: "copilot:auto",
+        size: 1,
+        loaded: true,
+        label: "Auto (Best available Copilot model)",
+        contextWindow: 1000000
+      });
+    }
     signal?.throwIfAborted();
     const sorted = [...models.values()].sort(compareModels);
     if (cacheKey && sorted.length) {
@@ -684,7 +699,8 @@
     return text;
   }
 
-  function chatEndpointForProvider(provider) {
+  function chatEndpointForProvider(provider, endpoint = "") {
+    if (endpoint === "/responses") return "/responses";
     if (provider === "anthropic") return "/v1/messages";
     if (provider === "copilot") return "/chat/completions";
     if (provider === "gemini") return "/v1beta/openai/chat/completions";
@@ -692,12 +708,27 @@
     return "/api/chat";
   }
 
-  function buildChatPayload({ provider, model, systemPrompt, userContent, schemaName, format, temperature, maxTokens }) {
+  function buildChatPayload({ provider, model, endpoint = "", systemPrompt, userContent, schemaName, format, temperature, maxTokens }) {
     const bareModel = provider === "ollama" ? model : model.slice(provider.length + 1);
     const messages = [
       { role: "system", content: systemPrompt },
       { role: "user", content: userContent }
     ];
+    if (endpoint === "/responses") {
+      return {
+        model: bareModel,
+        input: messages,
+        max_output_tokens: maxTokens,
+        text: {
+          format: {
+            type: "json_schema",
+            name: schemaName,
+            strict: true,
+            schema: format
+          }
+        }
+      };
+    }
     if (provider === "anthropic") {
       return {
         model: bareModel,
@@ -743,11 +774,13 @@
       };
     }
     if (provider === "copilot" || provider === "gemini") {
+      const isGemini = /^gemini/i.test(bareModel);
       return {
         model: bareModel,
         stream: false,
         temperature,
-        max_tokens: maxTokens,
+        max_tokens: isGemini ? Math.max(maxTokens, 1600) : maxTokens,
+        ...(isGemini ? { reasoning_effort: "low" } : {}),
         response_format: { type: "json_schema", json_schema: { name: schemaName, strict: true, schema: format } },
         messages
       };
@@ -763,7 +796,30 @@
     };
   }
 
-  function normalizeChatResponse(result, provider) {
+  function normalizeChatResponse(result, provider, endpoint = "") {
+    if (endpoint === "/responses") {
+      const outputItems = Array.isArray(result?.output) ? result.output : [];
+      let textOut = "";
+      for (const item of outputItems) {
+        if (!isObject(item) || !Array.isArray(item.content)) continue;
+        for (const block of item.content) {
+          if (isObject(block) && block.type === "output_text" && typeof block.text === "string" && block.text.trim()) {
+            textOut = block.text;
+            break;
+          }
+        }
+        if (textOut) break;
+      }
+      if (!isObject(result) || Object.hasOwn(result, "error") || !textOut) {
+        throw new LocalSummaryError(`${serverLabelForProvider(provider)} returned an incomplete response. Retry or choose another model.`);
+      }
+      const doneReason = result.status === "incomplete" ? "length" : "stop";
+      return {
+        done: true,
+        done_reason: doneReason,
+        message: { role: "assistant", content: stripCloudMarkdownFence(textOut) }
+      };
+    }
     if (provider === "anthropic") {
       const textBlock = Array.isArray(result?.content) ?
         result.content.find((block) => isObject(block) && block.type === "text" && typeof block.text === "string") : null;
@@ -791,6 +847,28 @@
     return result;
   }
 
+  function resolveCloudCandidates(model, models) {
+    const provider = providerForModel(model);
+    if (!isCloudProvider(provider)) return [model];
+    const available = new Set(models.filter((m) => m.id !== `${provider}:auto`).map((m) => m.id));
+    const defaults = provider === "copilot" ?
+      ["copilot:claude-sonnet-5.5", "copilot:gpt-5.4-nano", "copilot:claude-haiku-5.5", "copilot:gemini-4-argon", "copilot:claude-opus-5.5"] :
+      [];
+    const candidates = [];
+    if (model !== `${provider}:auto` && available.has(model)) {
+      candidates.push(model);
+    }
+    for (const fallback of defaults) {
+      if (available.has(fallback) && !candidates.includes(fallback)) candidates.push(fallback);
+    }
+    for (const entry of models) {
+      if (entry.id !== `${provider}:auto` && !candidates.includes(entry.id)) {
+        candidates.push(entry.id);
+      }
+    }
+    return candidates;
+  }
+
   async function summarize(value, { signal, fetchPage = fetch, onProgress = () => {}, apiKey = "" } = {}) {
     const source = validateSource(value);
     const { model, title, author, text, truncated, viewer } = source;
@@ -802,9 +880,10 @@
     const models = await listModels({ signal, fetchPage, provider, apiKey: effectiveKey });
     signal?.throwIfAborted();
     if (!models.some((entry) => entry.id === model)) {
-      throw new LocalSummaryError("The selected model is not an installed local completion model. Refresh the model list and choose an eligible local model; no comment text was sent.");
+      if (!isCloudProvider(provider) || !models.length) {
+        throw new LocalSummaryError("The selected model is not an installed local completion model. Refresh the model list and choose an eligible local model; no comment text was sent.");
+      }
     }
-    onProgress(isCloudProvider(provider) ? `Summarizing with ${serverLabelForProvider(provider)}...` : "Summarizing locally...");
     const format = {
       type: "object",
       properties: {
@@ -817,24 +896,40 @@
       additionalProperties: false
     };
     const userContent = JSON.stringify({ title, author, viewer, directRequestPossible, text, truncated });
-    const result = await requestJson(chatEndpointForProvider(provider), {
-      signal,
-      fetchPage,
-      provider,
-      apiKey: effectiveKey,
-      body: buildChatPayload({
-        provider,
-        model,
-        systemPrompt: SYSTEM_PROMPT,
-        userContent,
-        schemaName: "notification_summary",
-        format,
-        temperature: 0,
-        maxTokens: 500
-      })
-    });
-    signal?.throwIfAborted();
-    return readSummary(normalizeChatResponse(result, provider), source);
+    const candidates = isCloudProvider(provider) ? resolveCloudCandidates(model, models) : [model];
+    let lastError = null;
+    for (const candidateModel of candidates) {
+      signal?.throwIfAborted();
+      const entry = models.find((m) => m.id === candidateModel);
+      const endpoint = entry?.endpoint || "";
+      onProgress(isCloudProvider(provider) ? `Summarizing with ${serverLabelForProvider(provider)} (${candidateModel.slice(provider.length + 1)})...` : "Summarizing locally...");
+      try {
+        const result = await requestJson(chatEndpointForProvider(provider, endpoint), {
+          signal,
+          fetchPage,
+          provider,
+          apiKey: effectiveKey,
+          body: buildChatPayload({
+            provider,
+            model: candidateModel,
+            endpoint,
+            systemPrompt: SYSTEM_PROMPT,
+            userContent,
+            schemaName: "notification_summary",
+            format,
+            temperature: 0,
+            maxTokens: 500
+          })
+        });
+        signal?.throwIfAborted();
+        return readSummary(normalizeChatResponse(result, provider, endpoint), source);
+      } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw error;
+        lastError = error;
+        if (!isCloudProvider(provider)) throw error;
+      }
+    }
+    throw lastError || new LocalSummaryError(`${serverLabelForProvider(provider)} could not summarize this comment.`);
   }
 
   async function triageWithKev(value, { signal, fetchPage = fetch, origin = KEV_ORIGIN } = {}) {
@@ -990,11 +1085,10 @@
     const models = await listModels({ signal, fetchPage, provider, apiKey: effectiveKey });
     signal?.throwIfAborted();
     if (!models.some((entry) => entry.id === model)) {
-      throw new LocalSummaryError("The selected model is not an installed local completion model. Refresh the model list and choose an eligible local model.");
+      if (!isCloudProvider(provider) || !models.length) {
+        throw new LocalSummaryError("The selected model is not an installed local completion model. Refresh the model list and choose an eligible local model.");
+      }
     }
-    onProgress(isCloudProvider(provider) ?
-      `Drafting your morning executive briefing with ${serverLabelForProvider(provider)}...` :
-      "Drafting your morning executive briefing locally...");
     const format = {
       type: "object",
       properties: {
@@ -1004,40 +1098,64 @@
       additionalProperties: false
     };
     const userContent = JSON.stringify({ viewer, items });
-    const result = await requestJson(chatEndpointForProvider(provider), {
-      signal,
-      fetchPage,
-      provider,
-      apiKey: effectiveKey,
-      timeoutMs: 300000,
-      body: buildChatPayload({
-        provider,
-        model,
-        systemPrompt: BRIEFING_SYSTEM_PROMPT,
-        userContent,
-        schemaName: "morning_briefing",
-        format,
-        temperature: 0.2,
-        maxTokens: 900
-      })
-    });
-    signal?.throwIfAborted();
-    const normalized = normalizeChatResponse(result, provider);
-    const content = typeof normalized?.message?.content === "string" ? normalized.message.content.trim() : "";
-    if (!content) {
-      throw new LocalSummaryError("The local model returned an empty briefing. Retry or choose another local model.");
+    const candidates = isCloudProvider(provider) ? resolveCloudCandidates(model, models) : [model];
+    let lastError = null;
+    for (const candidateModel of candidates) {
+      signal?.throwIfAborted();
+      const entry = models.find((m) => m.id === candidateModel);
+      const endpoint = entry?.endpoint || "";
+      onProgress(isCloudProvider(provider) ?
+        `Drafting your morning executive briefing with ${serverLabelForProvider(provider)} (${candidateModel.slice(provider.length + 1)})...` :
+        "Drafting your morning executive briefing locally...");
+      try {
+        const result = await requestJson(chatEndpointForProvider(provider, endpoint), {
+          signal,
+          fetchPage,
+          provider,
+          apiKey: effectiveKey,
+          timeoutMs: 300000,
+          body: buildChatPayload({
+            provider,
+            model: candidateModel,
+            endpoint,
+            systemPrompt: BRIEFING_SYSTEM_PROMPT,
+            userContent,
+            schemaName: "morning_briefing",
+            format,
+            temperature: 0.2,
+            maxTokens: 900
+          })
+        });
+        signal?.throwIfAborted();
+        const normalized = normalizeChatResponse(result, provider, endpoint);
+        const content = typeof normalized?.message?.content === "string" ? normalized.message.content.trim() : "";
+        if (!content) {
+          throw new LocalSummaryError("The local model returned an empty briefing. Retry or choose another local model.");
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(content);
+        } catch {
+          throw new LocalSummaryError("The local model did not return valid briefing JSON. Retry or choose another local model.");
+        }
+        const briefing = trimToWordLimit(parsed?.briefing, 250, 1600);
+        if (!briefing) {
+          throw new LocalSummaryError("The local model returned an empty briefing paragraph. Retry or choose another local model.");
+        }
+        return {
+          briefing,
+          usedModel: candidateModel,
+          ...(candidateModel !== model && model !== `${provider}:auto` ? {
+            fallbackWarning: `${model} was unavailable; generated with ${candidateModel}.`
+          } : {})
+        };
+      } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw error;
+        lastError = error;
+        if (!isCloudProvider(provider)) throw error;
+      }
     }
-    let parsed;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      throw new LocalSummaryError("The local model did not return valid briefing JSON. Retry or choose another local model.");
-    }
-    const briefing = trimToWordLimit(parsed?.briefing, 250, 1600);
-    if (!briefing) {
-      throw new LocalSummaryError("The local model returned an empty briefing paragraph. Retry or choose another local model.");
-    }
-    return { briefing };
+    throw lastError || new LocalSummaryError(`${serverLabelForProvider(provider)} could not generate the Today briefing.`);
   }
 
   return {

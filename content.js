@@ -45,6 +45,14 @@
     return `${TODAY_BRIEFING_PREFIX}${viewer || "default"}`;
   }
 
+  function isCloudModel(model) {
+    return Boolean(model && summaryApi.isCloudProvider?.(summaryApi.providerForModel(model)));
+  }
+
+  function aiModeLabel(model) {
+    return isCloudModel(model) ? "Cloud AI" : "Local AI";
+  }
+
   async function preloadMemorySummaries() {
     try {
       const all = await chrome.storage.local.get(null);
@@ -1155,11 +1163,14 @@
     briefingHeader.append(briefingTitleWrap, briefingRegenerate);
     const briefingStatus = element("p", "gns-today-status");
     briefingStatus.setAttribute("role", "status");
+    const briefingWarning = element("p", "gns-today-fallback");
+    briefingWarning.setAttribute("role", "status");
+    briefingWarning.hidden = true;
     const briefingText = element("p", "gns-today-paragraph");
     briefingText.hidden = true;
     const briefingMeta = element("p", "gns-today-meta");
     briefingMeta.hidden = true;
-    briefingCard.append(briefingHeader, briefingStatus, briefingText, briefingMeta);
+    briefingCard.append(briefingHeader, briefingStatus, briefingWarning, briefingText, briefingMeta);
 
     const error = element("p", "gns-error");
     error.setAttribute("role", "alert");
@@ -1180,7 +1191,7 @@
       rendered: new Map(), controller: null, previewController: new AbortController(), commentTools: new Map(),
       authors: new Map(), responses: new Map(), kevScores: new Map(), kevOffline: false, kevDone: false,
       priorityOrder: null, prioritySnapshot: null,
-      briefingCard, briefingStatus, briefingText, briefingMeta, briefingRegenerate,
+      briefingCard, briefingStatus, briefingWarning, briefingText, briefingMeta, briefingRegenerate,
       briefingKey: "", briefingResult: null, briefingError: "", briefingRequest: null,
       sweepBar, sweepReview, sweepTeam, sweepParticipating, sweepAll, sweepStatus, sweeping: false, sweepMessage: "",
       summaryNote, summarize, stopSummaries: stop, summarySettingsButton: settings,
@@ -1323,16 +1334,27 @@
   }
 
   function checkModelOnce(current, model, signal) {
+    const isCloud = isCloudModel(model);
     if (current.modelCheckModel !== model || !current.modelCheckPromise) {
       current.modelCheckModel = model;
       const check = summaryClient.request({ type: "models", provider: summaryApi.providerForModel(model) }, {
         signal: current.previewController.signal
       }).then((models) => {
         if (!Array.isArray(models) || !models.some((entry) => entry.id === model)) {
+          if (isCloud) {
+            current.contextWindow = summaryApi.contextWindowForModel(model, models);
+            return models || [];
+          }
           throw new Error("The selected local model is unavailable. Choose an installed model in AI settings.");
         }
         current.contextWindow = summaryApi.contextWindowForModel(model, models);
         return models;
+      }, (error) => {
+        if (isCloud) {
+          current.contextWindow = summaryApi.contextWindowForModel(model);
+          return [];
+        }
+        throw error;
       }).finally(() => {
         if (current.modelCheckPromise === check) {
           current.modelCheckPromise = null;
@@ -1442,11 +1464,13 @@
     const ai = element("div", "gns-ai-summary");
     const aiLine = element("p", "gns-ai-line");
     const aiLabel = element("span", "gns-ai-label");
+    const aiFallbackPill = element("span", "gns-ai-fallback-pill", "Local fallback");
+    aiFallbackPill.hidden = true;
     const aiTruncatedPill = element("span", "gns-ai-truncated-pill", "Partial");
     aiTruncatedPill.title = "Summarized from a shortened comment preview";
     aiTruncatedPill.hidden = true;
     const aiText = element("span", "gns-ai-text");
-    aiLine.append(aiLabel, aiTruncatedPill, aiText);
+    aiLine.append(aiLabel, aiFallbackPill, aiTruncatedPill, aiText);
     let summaryExpanded = false;
     const aiToggle = button("Show more", "gns-text-button gns-ai-toggle", () => {
       summaryExpanded = !summaryExpanded;
@@ -1614,6 +1638,7 @@
       aiDetails.hidden = ai.hidden || phase !== "done";
       aiLine.hidden = phase !== "done";
       aiLabel.hidden = phase !== "done" || !aiLabel.textContent;
+      aiFallbackPill.hidden = phase !== "done" || ai.dataset.fallback !== "true";
       aiTruncatedPill.hidden = phase !== "done" || ai.dataset.truncated !== "true";
       aiButton.hidden = ["loading", "queued", "running", "unavailable", "done"].includes(phase);
       aiButton.disabled = !!summarySettingsError;
@@ -1639,6 +1664,9 @@
       aiToggle.remove();
       delete ai.dataset.response;
       delete ai.dataset.truncated;
+      delete ai.dataset.fallback;
+      aiFallbackPill.hidden = true;
+      aiFallbackPill.removeAttribute("title");
       aiTruncatedPill.hidden = true;
       setText(aiLabel, "");
       responseListener("");
@@ -1714,6 +1742,9 @@
       phase = "done";
       ai.dataset.response = effectiveResponse;
       ai.dataset.truncated = String(!!record.truncated);
+      ai.dataset.fallback = String(!!record.fallbackWarning);
+      aiFallbackPill.hidden = !record.fallbackWarning;
+      if (record.fallbackWarning) aiFallbackPill.title = record.fallbackWarning;
       aiTruncatedPill.hidden = !record.truncated;
       if (current.responses) current.responses.set(item.key, effectiveResponse);
       if (current.authors && record.author) current.authors.set(item.key, record.author);
@@ -1731,8 +1762,13 @@
       evidence.hidden = !result.evidence;
       if (result.evidence) aiAction.after(evidence);
       setText(evidenceText, result.evidence);
-      const isCloud = Boolean(summaryApi.isCloudProvider?.(summaryApi.providerForModel(record.model || summarySettings.model)));
-      setText(aiCaution, record.truncated ? "Based on a shortened comment. Check the original for omitted details." : "");
+      const effectiveModel = record.usedModel || record.model || summarySettings.model;
+      const isCloud = isCloudModel(effectiveModel);
+      const cautions = [
+        record.fallbackWarning || "",
+        record.truncated ? "Based on a shortened comment. Check the original for omitted details." : ""
+      ].filter(Boolean).join(" ");
+      setText(aiCaution, cautions);
       setText(aiMetadata, [`${result.response === "needs_response" ? "Needs your response" :
         result.response === "fyi" ? "FYI" : "Recipient unclear"} (${isCloud ? "cloud AI" : "local AI"})`,
       record.author ? `Source: ${record.author.startsWith("@") ? record.author : "@" + record.author}` : "Source author unavailable",
@@ -2105,7 +2141,8 @@
     kind.replaceChildren(icon(known ? known.path : KIND_ICONS[item.type] || KIND_ICONS.other));
     kind.dataset.kind = response || item.type || "other";
     kind.dataset.state = known ? "" : (item.state || "").toLowerCase().replace(/\s+/g, "-");
-    const label = known ? `${known.label} (local AI) / ${typeLabel}` : [typeLabel, item.state].filter(Boolean).join(" / ");
+    const aiLabelText = isCloudModel(summarySettings.model) ? "cloud AI" : "local AI";
+    const label = known ? `${known.label} (${aiLabelText}) / ${typeLabel}` : [typeLabel, item.state].filter(Boolean).join(" / ");
     kind.setAttribute("aria-label", label);
     kind.title = label;
   }
@@ -2237,6 +2274,10 @@
   function renderSavedTodayBriefing(current, saved) {
     current.briefingResult = saved;
     current.briefingStatus.hidden = true;
+    if (current.briefingWarning) {
+      current.briefingWarning.hidden = !saved.fallbackWarning;
+      setText(current.briefingWarning, saved.fallbackWarning || "");
+    }
     current.briefingText.hidden = false;
     setText(current.briefingText, saved.briefing);
     current.briefingMeta.hidden = false;
@@ -2246,11 +2287,12 @@
     const countLabel = saved.itemCount ?
       `Synthesized from ${saved.itemCount} P1 ${saved.itemCount === 1 ? "notification" : "notifications"}` :
       "Saved for today";
+    const effectiveModel = saved.usedModel || saved.model || summarySettings.model;
     setText(current.briefingMeta, [
       countLabel,
       timeLabel ? `saved today at ${timeLabel}` : "",
       `${wordCount} words`,
-      `Local AI (${saved.model || summarySettings.model})`
+      `${aiModeLabel(effectiveModel)} (${effectiveModel})`
     ].filter(Boolean).join(" · "));
     current.briefingRegenerate.hidden = false;
   }
@@ -2423,6 +2465,8 @@
         briefing: result.briefing,
         generatedAt: Date.now(),
         model: activeBriefingModel,
+        ...(result.usedModel ? { usedModel: result.usedModel } : {}),
+        ...(result.fallbackWarning ? { fallbackWarning: result.fallbackWarning } : {}),
         itemCount: briefingItems.length
       };
       await saveTodayBriefingForDay(current.viewer, savedRecord);
