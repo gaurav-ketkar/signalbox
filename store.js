@@ -198,6 +198,33 @@
       return settings;
     }
 
+    async function getProviderCredentials() {
+      const key = summary.CREDENTIALS_STORAGE_KEY || "summaries:v1:credentials";
+      const values = await area.get([key]);
+      const raw = values?.[key];
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+      const out = {};
+      for (const provider of summary.CLOUD_PROVIDERS || ["copilot", "openai", "anthropic", "gemini"]) {
+        if (typeof raw[provider] === "string" && raw[provider].trim()) {
+          out[provider] = raw[provider].trim().slice(0, 500);
+        }
+      }
+      return out;
+    }
+
+    async function saveProviderCredential(provider, apiKey) {
+      const allowed = summary.CLOUD_PROVIDERS || ["copilot", "openai", "anthropic", "gemini"];
+      if (!allowed.includes(provider)) throw new Error("Unsupported cloud provider.");
+      const key = summary.CREDENTIALS_STORAGE_KEY || "summaries:v1:credentials";
+      const existing = await getProviderCredentials();
+      const trimmed = typeof apiKey === "string" ? apiKey.trim().slice(0, 500) : "";
+      if (trimmed) existing[provider] = trimmed;
+      else delete existing[provider];
+      if (Object.keys(existing).length) await area.set({ [key]: existing });
+      else await area.remove(key);
+      return existing;
+    }
+
     async function listReviews(viewer) {
       const prefix = REVIEW_PREFIX + account(viewer) + ":";
       const values = await area.get(null);
@@ -289,7 +316,8 @@
     }
 
     return {
-      list, add, remove, getFilter, saveFilter, getPriorityRules, savePriorityRules, getSummarySettings, saveSummarySettings,
+      list, add, remove, getFilter, saveFilter, getPriorityRules, savePriorityRules,
+      getSummarySettings, saveSummarySettings, getProviderCredentials, saveProviderCredential,
       listReviews, setCaughtUp, getCachedSummary, saveCachedSummary, deleteCachedSummary,
       localDataCounts, clearLocalData
     };

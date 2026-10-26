@@ -236,14 +236,23 @@ beforeEach(async () => {
       lmModels: [{ key: "prism-ml/bonsai-27b", type: "llm", format: "mlx", size_bytes: 8521076756, loaded_instances: [{ id: "prism-ml/bonsai-27b" }] }],
       result: { summary: "Keyboard focus now returns to the Save button.", action: "Review the keyboard fix.", response: "fyi", evidence: "" }
     };
+    globalThis.gnsOriginalPermissionsContains ||= chrome.permissions.contains.bind(chrome.permissions);
+    chrome.permissions.contains = async (query) => {
+      if (query?.origins?.some((o) => o.startsWith("https://api.githubcopilot.com"))) return true;
+      return globalThis.gnsOriginalPermissionsContains(query);
+    };
+    chrome.permissions.request = async () => true;
     globalThis.fetch = async (input, options = {}) => {
       const url = String(input);
-      if (!/^http:\/\/127\.0\.0\.1:(11434|1234|8000)\//.test(url)) return globalThis.gnsOriginalFetch(input, options);
+      if (!/^(?:http:\/\/127\.0\.0\.1:(11434|1234|8000)|https:\/\/api\.githubcopilot\.com)\//.test(url)) {
+        return globalThis.gnsOriginalFetch(input, options);
+      }
       const state = globalThis.gnsTestAI;
       const lmStudio = url.startsWith("http://127.0.0.1:1234/");
       const splash = url.startsWith("http://127.0.0.1:8000/");
-      const chat = url.endsWith("/api/chat") || url.endsWith("/v1/chat/completions");
-      state.calls.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null });
+      const copilot = url.startsWith("https://api.githubcopilot.com/");
+      const chat = url.endsWith("/api/chat") || url.endsWith("/v1/chat/completions") || url.endsWith("/chat/completions");
+      state.calls.push({ url, method: options.method, headers: options.headers || {}, body: options.body ? JSON.parse(options.body) : null });
       options.signal?.throwIfAborted();
       if (chat) {
         state.active++;
@@ -274,9 +283,10 @@ beforeEach(async () => {
         role: "assistant",
         content: state.content ?? JSON.stringify(isBriefing ? (state.briefingResult || defaultBriefing) : state.result)
       };
-      return new Response(JSON.stringify(chat ? (lmStudio || splash ?
+      return new Response(JSON.stringify(chat ? (lmStudio || splash || copilot ?
         { choices: [{ finish_reason: "stop", message }] } :
         { done: true, done_reason: "stop", message }) :
+        copilot ? { data: [{ id: "claude-opus-5.5", name: "Claude Opus 5.5", object: "model", capabilities: { type: "chat", limits: { max_context_window_tokens: 1000000 } } }] } :
         splash ? { data: [{ id: "mlx-community/Qwen3.8-27B-4bit", object: "model", context_length: 262144 }] } :
         { models: lmStudio ? state.lmModels : state.models }), {
         status: chat ? state.chatStatus : state.tagsStatus,
@@ -1367,6 +1377,56 @@ test("restores unread state via /notifications/beta/unmark after summarizing an 
   await eventually(async () => (await page.locator(".notifications-list-item .gns-ai-summary[data-state='done']").count()) === 1, "Remaining row did not synchronously restore its summary");
   const afterSwapChatCalls = (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length;
   assert.equal(afterSwapChatCalls, initialChatCalls, "DOM replacement after clicking Done must not re-run local LLM inference");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("supports two-slot hybrid routing (local Splash for row summaries + GitHub Copilot for Today briefing) and manual-only cost control", async () => {
+  const nowIso = new Date().toISOString();
+  await worker.evaluate(async (key) => {
+    await chrome.storage.local.set({
+      [key]: {
+        contacts: { "lead-mgr": { points: 30, tier: 1, role: "Engineering Manager" } },
+        coreRepos: ["acme/console"],
+        adjacentRepos: []
+      }
+    });
+  }, core.PRIORITY_RULES_STORAGE_KEY);
+  routeState.rows = [
+    { href: "/acme/console/pull/203#issuecomment-123", title: "Manager urgent ask on roadmap", unread: true, reason: "mention", participants: ["lead-mgr"], dateTime: nowIso }
+  ];
+  routeState.next = null;
+
+  const manager = await openManager();
+  // Slot 1: Keep row summaries on $0 local Splash
+  assert.equal(await manager.locator("#summary-server").inputValue(), "splash");
+  await manager.locator("#connect-models").click();
+  await eventually(async () => (await manager.locator("#summary-model").inputValue()) === "splash:mlx-community/Qwen3.8-27B-4bit", "Splash model did not connect");
+  await manager.locator("#summary-manual-only").check();
+
+  // Slot 2: Route Today's Executive Briefing to GitHub Copilot (claude-opus-5.5)
+  await manager.locator("#briefing-server").selectOption("copilot");
+  await manager.locator("#briefing-api-key").fill("gho_copilot_test_token");
+  await manager.locator("#connect-briefing-models").click();
+  await eventually(async () => (await manager.locator("#briefing-model").inputValue()) === "copilot:claude-opus-5.5", "GitHub Copilot briefing model did not connect");
+  await manager.locator("#save-summary-settings").click();
+  await eventually(async () => (await manager.locator("#summary-status").textContent()).includes("Manual row clicks only is on"), "Hybrid settings did not save");
+
+  // On Inbox, bulk "Summarize comments" is hidden by manualOnly, while individual row "Summarize" remains available
+  await page.goto("https://github.com/notifications");
+  await page.locator("[data-gns-native-toolbar]").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Summarize comments", exact: true }).isVisible(), false);
+  assert.equal(await page.locator(".notifications-list-item .gns-ai-start").first().isVisible(), true);
+
+  // On Today (#today), P1 row is summarized locally via Splash (127.0.0.1:8000) and the Executive Briefing is synthesized via GitHub Copilot (api.githubcopilot.com)
+  await page.goto("https://github.com/notifications#today");
+  await page.locator("[data-gns-panel='today']").waitFor();
+  await eventually(async () => (await page.locator(".gns-today-paragraph").isVisible()) &&
+    (await page.locator(".gns-today-paragraph").textContent()).includes("acme/console#203"),
+    "Hybrid Today briefing did not finish");
+  assert.match(await page.locator(".gns-today-meta").textContent(), /copilot:claude-opus-5\.5/);
+  const calls = (await aiState()).calls;
+  assert.ok(calls.some((c) => c.url === "http://127.0.0.1:8000/v1/chat/completions" && c.body?.model === "mlx-community/Qwen3.8-27B-4bit"), "Expected P1 row summary to use local Splash");
+  assert.ok(calls.some((c) => c.url === "https://api.githubcopilot.com/chat/completions" && c.body?.model === "claude-opus-5.5"), "Expected Today briefing to use GitHub Copilot claude-opus-5.5");
   assert.deepEqual(pageErrors, []);
 });
 

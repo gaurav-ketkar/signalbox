@@ -56,14 +56,25 @@ When you click **Preview linked comment** or **Summarize**, Signalbox fetches th
 
 ---
 
-## 4. Local AI Summarization Pipeline
+## 4. AI Summarization Pipeline (Local, Cloud & Two-Slot Hybrid Routing)
 
-Summaries run 100% locally against fixed loopback endpoints (defaulting to **Splash**):
-- **Splash:** `http://127.0.0.1:8000`
-- **Ollama:** `http://127.0.0.1:11434`
-- **LM Studio:** `http://127.0.0.1:1234`
-- **Local MLX Server:** `http://127.0.0.1:8080`
-- **Local Kev Triage (optional):** `http://127.0.0.1:8009`
+Summaries default to 100% local loopback endpoints (**Splash** by default), with optional Bring-Your-Own-Key / subscription support for cloud providers:
+- **Local ($0, 100% On-Device):**
+  - **Splash:** `http://127.0.0.1:8000`
+  - **Local MLX Server:** `http://127.0.0.1:8080`
+  - **LM Studio:** `http://127.0.0.1:1234`
+  - **Ollama:** `http://127.0.0.1:11434`
+  - **Local Kev Triage (optional):** `http://127.0.0.1:8009`
+- **Cloud (Optional Host Permissions Granted On Demand):**
+  - **GitHub Copilot:** `https://api.githubcopilot.com` (authenticate with `gh auth token`)
+  - **OpenAI:** `https://api.openai.com`
+  - **Anthropic:** `https://api.anthropic.com`
+  - **Google Gemini:** `https://generativelanguage.googleapis.com`
+
+### Two-Slot Hybrid Routing & Near-Zero-Cost Controls
+- **Slot 1 — Row Summaries (`#summary-model`):** Used for individual notification rows across `Inbox`, `Priority`, `Subscriptions`, and native filters.
+- **Slot 2 — Today's Executive Briefing (`#briefing-model`):** Defaults to your Row Summaries model, or lets you pick a dedicated frontier model (such as `copilot:claude-opus-5.5`, `anthropic:claude-opus-4-5`, or `gemini:gemini-2.5-pro`) strictly for the once-per-day `#today` synthesis (~1,000 input tokens/day).
+- **Manual row clicks only (`manualOnly`):** Disables bulk `Summarize comments` and automatic on-load summarization so cloud tokens are only spent when you explicitly click `Summarize` on a specific row.
 
 ### Splash Setup
 Install [Splash](https://github.com/incoai/splash) separately. In `chrome://extensions`, enable Developer mode, copy Signalbox's extension ID, and start Splash with that exact extension origin allowed (replace `YOUR_EXTENSION_ID`):

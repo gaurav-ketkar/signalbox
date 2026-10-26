@@ -204,8 +204,10 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     received = true;
+    const allowedProviders = summary.ALL_PROVIDERS || ["ollama", "lmstudio", "mlx", "splash", "copilot", "openai", "anthropic", "gemini"];
     if (!["models", "summarize", "briefing", "triage", "kev-status"].includes(message?.type) ||
-        (message.type === "models" && message.provider !== undefined && !["ollama", "lmstudio", "mlx", "splash"].includes(message.provider)) ||
+        (message.type === "models" && message.provider !== undefined && !allowedProviders.includes(message.provider)) ||
+        (message.type === "models" && message.apiKey !== undefined && (typeof message.apiKey !== "string" || message.apiKey.length > 500)) ||
         (["summarize", "briefing", "triage", "kev-status"].includes(message.type) && page !== "notifications")) {
       send({ type: "error", message: "Open AI settings or GitHub notifications to use local summaries." });
       return;
@@ -266,12 +268,24 @@ chrome.runtime.onConnect.addListener((port) => {
     job.run = async () => {
       try {
         controller.signal.throwIfAborted();
-        const permitted = await chrome.permissions.contains({ origins: [summary.PERMISSION_ORIGIN] });
-        if (!permitted) throw new Error("Allow this extension to access 127.0.0.1 in Chrome's extension settings, then retry.");
+        const activeProvider = message.type === "models" ? (message.provider || "ollama") :
+          (message.type === "summarize" || message.type === "briefing") && summary.providerForModel ?
+            summary.providerForModel(message.model) : "ollama";
+        const requiredOrigin = summary.permissionOriginForProvider ?
+          summary.permissionOriginForProvider(activeProvider) : summary.PERMISSION_ORIGIN;
+        const permitted = await chrome.permissions.contains({ origins: [requiredOrigin] });
+        if (!permitted) {
+          throw new Error(requiredOrigin === summary.PERMISSION_ORIGIN ?
+            "Allow this extension to access 127.0.0.1 in Chrome's extension settings, then retry." :
+            `Allow this extension to access ${requiredOrigin} in AI settings, then retry.`);
+        }
         controller.signal.throwIfAborted();
+        const credentials = store.getProviderCredentials ? await store.getProviderCredentials() : {};
+        const apiKey = (message.type === "models" && typeof message.apiKey === "string" && message.apiKey.trim()) ?
+          message.apiKey.trim() : (credentials[activeProvider] || "");
         let value;
         if (message.type === "models") {
-          value = await summary.listModels({ signal: controller.signal, provider: message.provider });
+          value = await summary.listModels({ signal: controller.signal, provider: message.provider, apiKey });
           if (Array.isArray(value)) {
             for (const entry of value) {
               if (entry?.id && entry?.contextWindow) knownContextWindows.set(entry.id, entry.contextWindow);
@@ -294,11 +308,13 @@ chrome.runtime.onConnect.addListener((port) => {
         } else if (message.type === "briefing") {
           const settings = await store.getSummarySettings();
           controller.signal.throwIfAborted();
-          if (!settings.model || message.model !== settings.model) {
+          const expectedBriefingModel = settings.briefingModel || settings.model;
+          if (!expectedBriefingModel || (message.model !== expectedBriefingModel && message.model !== settings.model)) {
             throw new Error("The local model setting changed. Open AI settings or retry the briefing.");
           }
           value = await summary.summarizeBriefing(message, {
             signal: controller.signal,
+            apiKey,
             onProgress: (text) => send({ type: "progress", message: text })
           });
         } else {
@@ -326,7 +342,7 @@ chrome.runtime.onConnect.addListener((port) => {
           }
           const reused = cached?.fingerprint === fingerprint;
           const result = reused ? cached.result : await summary.summarize(source, {
-            signal: controller.signal, onProgress: (text) => send({ type: "progress", message: text })
+            signal: controller.signal, apiKey, onProgress: (text) => send({ type: "progress", message: text })
           });
           controller.signal.throwIfAborted();
           const now = Date.now();

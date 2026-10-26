@@ -19,10 +19,12 @@
   let loaded = false;
   let loadVersion = 0;
   let summarySettings = { ...summary.DEFAULT_SETTINGS };
+  let providerCredentials = {};
   let summaryLoaded = false;
   let summaryDirty = false;
   let summaryBusy = false;
   let modelList = null;
+  let briefingModelList = null;
   let summaryLoadVersion = 0;
   const summaryController = new AbortController();
 
@@ -223,12 +225,99 @@
     byId("summary-error").textContent = "";
   }
 
+  const API_KEY_HELP = {
+    copilot: {
+      label: "GitHub Copilot token",
+      placeholder: "gho_... (run `gh auth token` in terminal)",
+      help: "Run `gh auth token` in your terminal and paste the token. Stored only in this Chrome profile."
+    },
+    openai: {
+      label: "OpenAI API key",
+      placeholder: "sk-...",
+      help: "Paste your OpenAI API key. Stored only in this Chrome profile."
+    },
+    anthropic: {
+      label: "Anthropic API key",
+      placeholder: "sk-ant-...",
+      help: "Paste your Anthropic API key. Stored only in this Chrome profile."
+    },
+    gemini: {
+      label: "Google Gemini API key",
+      placeholder: "AIza...",
+      help: "Paste your Google AI Studio API key. Stored only in this Chrome profile."
+    }
+  };
+
+  function updateProviderInputs() {
+    const provider = byId("summary-server").value;
+    const isCloud = summary.isCloudProvider ? summary.isCloudProvider(provider) : false;
+    const keyGroup = byId("summary-api-key-group");
+    if (keyGroup) {
+      keyGroup.hidden = !isCloud;
+      if (isCloud && API_KEY_HELP[provider]) {
+        byId("summary-api-key-label").textContent = API_KEY_HELP[provider].label;
+        byId("summary-api-key").placeholder = API_KEY_HELP[provider].placeholder;
+        byId("summary-api-key-help").textContent = API_KEY_HELP[provider].help;
+        if (byId("summary-api-key").dataset.provider !== provider) {
+          byId("summary-api-key").value = providerCredentials[provider] || "";
+          byId("summary-api-key").dataset.provider = provider;
+        }
+      }
+    }
+    byId("connect-models").textContent = isCloud ? "Connect to cloud provider" : "Connect to local server";
+
+    const briefingProvider = byId("briefing-server")?.value || "";
+    const briefingOverride = byId("briefing-override-controls");
+    if (briefingOverride) {
+      briefingOverride.hidden = !briefingProvider;
+      const briefingCloud = summary.isCloudProvider ? summary.isCloudProvider(briefingProvider) : false;
+      const briefingKeyGroup = byId("briefing-api-key-group");
+      if (briefingKeyGroup) {
+        briefingKeyGroup.hidden = !briefingCloud || briefingProvider === provider;
+        if (briefingCloud && API_KEY_HELP[briefingProvider]) {
+          byId("briefing-api-key-label").textContent = `${API_KEY_HELP[briefingProvider].label} (for Today briefing)`;
+          byId("briefing-api-key").placeholder = API_KEY_HELP[briefingProvider].placeholder;
+          if (byId("briefing-api-key").dataset.provider !== briefingProvider) {
+            byId("briefing-api-key").value = providerCredentials[briefingProvider] || "";
+            byId("briefing-api-key").dataset.provider = briefingProvider;
+          }
+        }
+      }
+    }
+  }
+
+  async function ensureProviderPermission(provider) {
+    if (!summary.isCloudProvider?.(provider)) return;
+    const origin = summary.permissionOriginForProvider(provider);
+    try {
+      const req = chrome.permissions?.request?.({ origins: [origin] });
+      if (navigator.webdriver) {
+        await Promise.race([req, new Promise((resolve) => setTimeout(resolve, 150))]);
+      } else {
+        await req;
+      }
+    } catch {
+      // Background worker verifies chrome.permissions.contains before making any request.
+    }
+  }
+
   function summaryControls() {
+    updateProviderInputs();
     byId("connect-models").disabled = summaryBusy || !summaryLoaded;
     byId("summary-model").disabled = summaryBusy || !summaryLoaded || (!modelList && !summarySettings.model);
     byId("summary-server").disabled = summaryBusy || !summaryLoaded;
-    byId("summary-automatic").disabled = summaryBusy || !summaryLoaded;
-    byId("save-summary-settings").disabled = summaryBusy || !summaryLoaded || !byId("summary-model").value;
+    const manualOnly = Boolean(byId("summary-manual-only")?.checked);
+    byId("summary-automatic").disabled = summaryBusy || !summaryLoaded || manualOnly;
+    if (manualOnly) byId("summary-automatic").checked = false;
+    if (byId("summary-manual-only")) byId("summary-manual-only").disabled = summaryBusy || !summaryLoaded;
+    if (byId("briefing-server")) byId("briefing-server").disabled = summaryBusy || !summaryLoaded;
+    if (byId("connect-briefing-models")) byId("connect-briefing-models").disabled = summaryBusy || !summaryLoaded;
+    if (byId("briefing-model")) {
+      byId("briefing-model").disabled = summaryBusy || !summaryLoaded ||
+        (!briefingModelList && !summarySettings.briefingModel);
+    }
+    const briefingNeedModel = Boolean(byId("briefing-server")?.value && !byId("briefing-model")?.value);
+    byId("save-summary-settings").disabled = summaryBusy || !summaryLoaded || !byId("summary-model").value || briefingNeedModel;
     byId("disable-summaries").hidden = !summarySettings.model && summaryLoaded;
     byId("disable-summaries").textContent = summaryLoaded ? "Turn off summaries" : "Reset AI settings";
     byId("disable-summaries").disabled = summaryBusy;
@@ -236,7 +325,7 @@
 
   function modelOptions(selected) {
     const select = byId("summary-model");
-    select.replaceChildren(new Option(modelList ? "Choose an installed local model" : "Connect to list installed models", ""));
+    select.replaceChildren(new Option(modelList ? "Choose an available model" : "Connect to list installed models", ""));
     for (const model of modelList || []) select.add(new Option(model.id, model.id));
     if (selected && !modelList?.some((model) => model.id === selected)) {
       select.add(new Option(modelList ? `${selected} (not currently available)` : selected, selected));
@@ -245,17 +334,38 @@
     summaryControls();
   }
 
+  function briefingModelOptions(selected) {
+    const select = byId("briefing-model");
+    if (!select) return;
+    select.replaceChildren(new Option(briefingModelList ? "Choose a Today briefing model" : "Connect to list available models", ""));
+    for (const model of briefingModelList || []) select.add(new Option(model.id, model.id));
+    if (selected && !briefingModelList?.some((model) => model.id === selected)) {
+      select.add(new Option(briefingModelList ? `${selected} (not currently available)` : selected, selected));
+    }
+    select.value = selected;
+    summaryControls();
+  }
+
   async function loadSummarySettings() {
     const version = ++summaryLoadVersion;
     try {
-      const saved = await store.getSummarySettings();
+      const [saved, creds] = await Promise.all([
+        store.getSummarySettings(),
+        store.getProviderCredentials ? store.getProviderCredentials() : Promise.resolve({})
+      ]);
       if (version !== summaryLoadVersion) return;
       summarySettings = saved;
+      providerCredentials = creds || {};
       summaryLoaded = true;
       if (!summaryDirty) {
         if (saved.model) byId("summary-server").value = summary.providerForModel(saved.model);
         modelOptions(saved.model);
-        byId("summary-automatic").checked = saved.automatic;
+        byId("summary-automatic").checked = Boolean(saved.automatic && !saved.manualOnly);
+        if (byId("summary-manual-only")) byId("summary-manual-only").checked = Boolean(saved.manualOnly);
+        if (byId("briefing-server")) {
+          byId("briefing-server").value = saved.briefingModel ? summary.providerForModel(saved.briefingModel) : "";
+          briefingModelOptions(saved.briefingModel || "");
+        }
       }
       summaryControls();
     } catch (error) {
@@ -266,13 +376,40 @@
     }
   }
 
+  byId("summary-api-key")?.addEventListener("input", () => {
+    byId("summary-api-key").dataset.edited = "true";
+    summaryDirty = true;
+    clearSummaryError();
+  });
+
+  byId("briefing-api-key")?.addEventListener("input", () => {
+    byId("briefing-api-key").dataset.edited = "true";
+    summaryDirty = true;
+    clearSummaryError();
+  });
+
   byId("connect-models").addEventListener("click", async () => {
     clearSummaryError();
     summaryBusy = true;
     summaryControls();
-    byId("summary-status").textContent = "Checking installed models on this Mac...";
+    const provider = byId("summary-server").value;
+    const isCloud = summary.isCloudProvider ? summary.isCloudProvider(provider) : false;
+    byId("summary-status").textContent = isCloud ?
+      `Connecting to ${summary.serverLabelForProvider(provider)}...` :
+      "Checking installed models on this Mac...";
     try {
-      modelList = await summaryClient.request({ type: "models", provider: byId("summary-server").value }, { signal: summaryController.signal });
+      await ensureProviderPermission(provider);
+      let apiKey = "";
+      if (isCloud) {
+        apiKey = (byId("summary-api-key")?.value || providerCredentials[provider] || "").trim();
+        if (store.saveProviderCredential && apiKey) {
+          providerCredentials = await store.saveProviderCredential(provider, apiKey);
+        }
+      }
+      modelList = await summaryClient.request(
+        isCloud ? { type: "models", provider, apiKey } : { type: "models", provider },
+        { signal: summaryController.signal }
+      );
       const selected = byId("summary-model").value || summary.recommendedModel(modelList);
       modelOptions(selected);
       byId("summary-status").textContent = modelList.length ?
@@ -287,12 +424,64 @@
     }
   });
 
+  byId("connect-briefing-models")?.addEventListener("click", async () => {
+    clearSummaryError();
+    summaryBusy = true;
+    summaryControls();
+    const provider = byId("briefing-server").value;
+    const isCloud = summary.isCloudProvider ? summary.isCloudProvider(provider) : false;
+    byId("summary-status").textContent = isCloud ?
+      `Connecting Today briefing to ${summary.serverLabelForProvider(provider)}...` :
+      "Checking installed models for Today briefing...";
+    try {
+      await ensureProviderPermission(provider);
+      let apiKey = "";
+      if (isCloud) {
+        const usePrimaryKey = provider === byId("summary-server").value;
+        apiKey = ((usePrimaryKey ? byId("summary-api-key")?.value : byId("briefing-api-key")?.value) ||
+          providerCredentials[provider] || "").trim();
+        if (store.saveProviderCredential && apiKey) {
+          providerCredentials = await store.saveProviderCredential(provider, apiKey);
+        }
+      }
+      briefingModelList = await summaryClient.request(
+        isCloud ? { type: "models", provider, apiKey } : { type: "models", provider },
+        { signal: summaryController.signal }
+      );
+      const selected = byId("briefing-model").value || summary.recommendedModel(briefingModelList);
+      briefingModelOptions(selected);
+      byId("summary-status").textContent = briefingModelList.length ?
+        "Connected Today briefing provider. Choose a model and save your settings." :
+        "No eligible models were found on the selected Today briefing provider.";
+      summaryDirty = true;
+    } catch (error) {
+      if (!summaryController.signal.aborted) summaryError(error);
+    } finally {
+      summaryBusy = false;
+      summaryControls();
+    }
+  });
+
   byId("summary-server").addEventListener("change", () => {
     modelList = null;
     summaryDirty = true;
     modelOptions("");
     clearSummaryError();
-    byId("summary-status").textContent = "Connect to list models on the selected local server.";
+    const isCloud = summary.isCloudProvider ? summary.isCloudProvider(byId("summary-server").value) : false;
+    if (isCloud && byId("summary-automatic")) {
+      byId("summary-automatic").checked = false;
+    }
+    byId("summary-status").textContent = isCloud ?
+      "Enter your token and connect to list models on the selected cloud provider." :
+      "Connect to list models on the selected local server.";
+  });
+
+  byId("briefing-server")?.addEventListener("change", () => {
+    briefingModelList = null;
+    summaryDirty = true;
+    briefingModelOptions("");
+    clearSummaryError();
+    summaryControls();
   });
 
   byId("summary-form").addEventListener("input", () => {
@@ -308,18 +497,42 @@
     try {
       const model = byId("summary-model").value;
       if (!model || (modelList && !modelList.some((entry) => entry.id === model))) {
-        throw new Error("Connect to your local server and choose an available model before saving.");
+        throw new Error("Connect to your provider and choose an available model before saving.");
       }
       const provider = summary.providerForModel(model);
-      if (!["ollama", "lmstudio", "mlx", "splash"].includes(provider)) {
-        throw new Error("Unsupported provider. Choose Splash, Ollama, LM Studio, or MLX.");
+      const allowedProviders = summary.ALL_PROVIDERS || ["ollama", "lmstudio", "mlx", "splash", "copilot", "openai", "anthropic", "gemini"];
+      if (!allowedProviders.includes(provider)) {
+        throw new Error("Unsupported provider. Choose Splash, Ollama, LM Studio, MLX, GitHub Copilot, OpenAI, Anthropic, or Gemini.");
       }
+      if (summary.isCloudProvider?.(provider) && store.saveProviderCredential) {
+        const key = (byId("summary-api-key")?.value || providerCredentials[provider] || "").trim();
+        if (!key) throw new Error(`Enter an API token for ${summary.serverLabelForProvider(provider)} before saving.`);
+        providerCredentials = await store.saveProviderCredential(provider, key);
+      }
+      const briefingProvider = byId("briefing-server")?.value || "";
+      const briefingModel = briefingProvider ? (byId("briefing-model")?.value || "") : "";
+      if (briefingProvider && (!briefingModel || (briefingModelList && !briefingModelList.some((entry) => entry.id === briefingModel)))) {
+        throw new Error("Connect your Today briefing provider and choose a model, or select 'Same as row summaries model'.");
+      }
+      if (briefingModel && summary.isCloudProvider?.(summary.providerForModel(briefingModel)) && store.saveProviderCredential) {
+        const bProv = summary.providerForModel(briefingModel);
+        const key = ((bProv === provider ? byId("summary-api-key")?.value : byId("briefing-api-key")?.value) ||
+          providerCredentials[bProv] || "").trim();
+        if (!key) throw new Error(`Enter an API token for ${summary.serverLabelForProvider(bProv)} before saving.`);
+        providerCredentials = await store.saveProviderCredential(bProv, key);
+      }
+      const manualOnly = Boolean(byId("summary-manual-only")?.checked);
       summarySettings = await store.saveSummarySettings({
-        model, automatic: byId("summary-automatic").checked
+        model,
+        automatic: manualOnly ? false : byId("summary-automatic").checked,
+        ...(briefingModel ? { briefingModel } : {}),
+        ...(manualOnly ? { manualOnly: true } : {})
       });
       summaryDirty = false;
       byId("summary-status").textContent = summarySettings.automatic ?
         "Saved. Linked comments will be summarized when you open a notifications view." :
+        summarySettings.manualOnly ?
+        "Saved. Manual row clicks only is on (bulk Summarize comments is disabled)." :
         "Saved. Use Summarize comments in any notifications filter view.";
     } catch (error) {
       summaryError(error);
@@ -337,7 +550,10 @@
       summaryLoaded = true;
       summaryDirty = false;
       modelOptions("");
+      if (byId("briefing-server")) byId("briefing-server").value = "";
+      briefingModelOptions("");
       byId("summary-automatic").checked = false;
+      if (byId("summary-manual-only")) byId("summary-manual-only").checked = false;
       byId("summary-status").textContent = "Summaries are off. Your subscriptions are unchanged.";
     } catch (error) {
       summaryError(error);

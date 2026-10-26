@@ -1292,13 +1292,14 @@
     const pending = tools.filter((entry) => entry.pending()).length;
     const done = tools.filter((entry) => entry.finished()).length;
     const configured = !!summarySettings.model && !summarySettingsError;
+    const manualOnly = Boolean(summarySettings.manualOnly);
     setText(current.summaryNote, summarySettingsError ? `AI settings need attention: ${summarySettingsError}` :
-      !configured ? "Optional AI summaries run on this Mac. Choose a model to get started." :
-      pending ? `${done} summarized / ${pending} waiting or running locally.` :
-      `${done} summarized locally. ${current.summariesPaused ? "Summaries paused." : summarySettings.automatic ? "Automatic summaries on." : "Automatic summaries off."} Loading comments may mark them read.`);
+      !configured ? "Optional AI summaries run on this Mac or via your chosen provider. Choose a model to get started." :
+      pending ? `${done} summarized / ${pending} waiting or running.` :
+      `${done} summarized. ${current.summariesPaused ? "Summaries paused." : manualOnly ? "Manual row clicks only on." : summarySettings.automatic ? "Automatic summaries on." : "Automatic summaries off."} Loading comments may mark them read.`);
     current.summaryNote.dataset.failed = String(!!summarySettingsError);
-    current.summarize.hidden = !configured;
-    current.summarize.disabled = !ready || !tools.some((entry) => entry.canStart());
+    current.summarize.hidden = !configured || manualOnly;
+    current.summarize.disabled = !ready || manualOnly || !tools.some((entry) => entry.canStart());
     current.stopSummaries.hidden = pending === 0;
     const settingsLabel = configured ? "AI settings" : "Set up local summaries";
     current.summarySettingsButton.setAttribute("aria-label", settingsLabel);
@@ -1756,6 +1757,19 @@
       }
       const memRecord = memKey ? memorySummaries.get(memKey) : null;
       if (memRecord && (!activity || !memRecord.activity || memRecord.activity === activity)) {
+        if (memRecord.fingerprint !== cached?.fingerprint && (commentLoaded || commentRequest || summarySourceLoaded || summarySourceRequest)) {
+          previewRequest = null;
+          commentRequest?.controller.abort();
+          summarySourceRequest?.controller.abort();
+          commentLoaded = false;
+          comment = null;
+          summarySourceLoaded = false;
+          summarySource = null;
+          details.open = false;
+          setText(text, "");
+          setText(metadata, "");
+          setText(status, "The saved summary changed. Expand to reload its exact source.");
+        }
         cached = memRecord;
         automaticAttempted = true;
         checkedInThisTab.add(visitKey);
@@ -1802,7 +1816,7 @@
           phase = "idle";
         }
         paintSummary();
-        if (allowAutomatic && summarySettings.automatic && current.reviewsReady && !caughtUp(current, item) && !automaticAttempted) {
+        if (allowAutomatic && summarySettings.automatic && !summarySettings.manualOnly && current.reviewsReady && !caughtUp(current, item) && !automaticAttempted) {
           startSummary(true);
         }
       } catch (error) {
@@ -1818,7 +1832,7 @@
       if (!target || !summarySettings.model || summarySettingsError ||
           ["loading", "queued", "running", "unavailable"].includes(phase) || lifetime.signal.aborted) return;
       const visitKey = tabCheckKey(current.viewer, summarySettings.model, item.key, storeApi.activityToken(item));
-      if (automatic && (!["idle", "done"].includes(phase) || current.summariesPaused ||
+      if (automatic && (!["idle", "done"].includes(phase) || current.summariesPaused || summarySettings.manualOnly ||
           !current.reviewsReady || caughtUp(current, item) || automaticAttempted || checkedInThisTab.has(visitKey))) return;
       automaticAttempted = true;
       checkedInThisTab.add(visitKey);
@@ -2268,11 +2282,12 @@
   async function updateTodayBriefing(current, force = false) {
     if (!current || current.mode !== "today" || view !== current || !current.briefingCard) return;
     current.briefingCard.hidden = false;
-    if (!summarySettings.model || summarySettingsError) {
+    const activeBriefingModel = summarySettings.briefingModel || summarySettings.model;
+    if (!activeBriefingModel || summarySettingsError) {
       current.briefingStatus.hidden = false;
       setText(current.briefingStatus, summarySettingsError ?
         `AI settings need attention: ${summarySettingsError}` :
-        "Choose a local model in AI settings to generate your morning executive briefing.");
+        "Choose a local or cloud model in AI settings to generate your morning executive briefing.");
       current.briefingText.hidden = true;
       current.briefingMeta.hidden = true;
       current.briefingRegenerate.hidden = true;
@@ -2280,7 +2295,7 @@
     }
 
     if (!force) {
-      const savedToday = await loadSavedTodayBriefing(current.viewer, summarySettings.model);
+      const savedToday = await loadSavedTodayBriefing(current.viewer, activeBriefingModel);
       if (view !== current || current.mode !== "today") return;
       if (savedToday) {
         current.briefingKey = `saved-day|${savedToday.generatedAt}`;
@@ -2355,7 +2370,7 @@
 
     const key = [
       current.viewer || "anon",
-      summarySettings.model,
+      activeBriefingModel,
       ...briefingItems.map((entry) => `${entry.label}:${entry.score}:${entry.response}:${entry.summary}`)
     ].join("|");
 
@@ -2370,13 +2385,13 @@
     current.briefingKey = key;
     current.briefingError = "";
     current.briefingStatus.hidden = false;
-    setText(current.briefingStatus, "Drafting your morning executive briefing locally (taking extra time for high-signal synthesis)...");
+    setText(current.briefingStatus, `Drafting your morning executive briefing with ${activeBriefingModel}...`);
     current.briefingRegenerate.hidden = true;
 
     try {
       const result = await summaryClient.request({
         type: "briefing",
-        model: summarySettings.model,
+        model: activeBriefingModel,
         viewer: current.viewer,
         items: briefingItems
       }, {
@@ -2392,7 +2407,7 @@
       const savedRecord = {
         briefing: result.briefing,
         generatedAt: Date.now(),
-        model: summarySettings.model,
+        model: activeBriefingModel,
         itemCount: briefingItems.length
       };
       await saveTodayBriefingForDay(current.viewer, savedRecord);

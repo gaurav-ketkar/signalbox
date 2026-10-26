@@ -213,10 +213,13 @@ test("invalid local server choices cannot become arbitrary endpoints", async () 
 test("summary exposes the exact CommonJS and browser-global API without dependencies", () => {
   assert.equal(globalThis.GitHubSubscriptionSummary, summary);
   assert.deepEqual(Object.keys(summary).sort(), [
-    "BRIEFING_VERSION", "DEFAULT_CONTEXT_WINDOW", "DEFAULT_SETTINGS", "KEV_ORIGIN", "MAX_PARALLEL_SUMMARIES",
-    "ORIGIN", "LM_STUDIO_ORIGIN", "MLX_ORIGIN", "SPLASH_ORIGIN", "PERMISSION_ORIGIN", "STORAGE_KEY", "SUMMARY_VERSION",
-    "contextWindowForModel", "estimateTokens", "listModels", "maxParallelSummaries",
-    "providerForModel", "recommendedModel", "summarize", "summarizeBriefing", "triageWithKev", "validateSettings", "validateResult"
+    "ALL_PROVIDERS", "ANTHROPIC_ORIGIN", "BRIEFING_VERSION", "CLOUD_PROVIDERS", "COPILOT_ORIGIN",
+    "CREDENTIALS_STORAGE_KEY", "DEFAULT_CONTEXT_WINDOW", "DEFAULT_SETTINGS", "GEMINI_ORIGIN",
+    "KEV_ORIGIN", "LM_STUDIO_ORIGIN", "LOCAL_PROVIDERS", "MAX_PARALLEL_SUMMARIES", "MLX_ORIGIN",
+    "OPENAI_ORIGIN", "ORIGIN", "PERMISSION_ORIGIN", "SPLASH_ORIGIN", "STORAGE_KEY", "SUMMARY_VERSION",
+    "contextWindowForModel", "estimateTokens", "isCloudProvider", "listModels", "maxParallelSummaries",
+    "originForProvider", "permissionOriginForProvider", "providerForModel", "recommendedModel",
+    "serverLabelForProvider", "summarize", "summarizeBriefing", "triageWithKev", "validateResult", "validateSettings"
   ].sort());
   const browser = {};
   vm.runInNewContext(readFileSync(require.resolve("../summary.js"), "utf8"), browser);
@@ -225,6 +228,94 @@ test("summary exposes the exact CommonJS and browser-global API without dependen
   assert.equal(browser.GitHubSubscriptionSummary.ORIGIN, "http://127.0.0.1:11434");
   assert.equal(summary.PERMISSION_ORIGIN, "http://127.0.0.1/*");
   assert.equal(summary.STORAGE_KEY, "summaries:v1:settings");
+});
+
+test("supports GitHub Copilot, OpenAI, Anthropic, and Gemini cloud providers and two-slot hybrid settings", async () => {
+  // Missing API key refuses cloud connection before making any HTTP call
+  for (const provider of ["copilot", "openai", "anthropic", "gemini"]) {
+    await assert.rejects(
+      summary.listModels({ provider, apiKey: "", fetchPage: () => assert.fail("Must not call fetch without apiKey") }),
+      /Enter an API token/
+    );
+  }
+
+  // Two-slot settings validation (local row model + cloud Today briefing model + manualOnly cost control)
+  assert.deepEqual(
+    summary.validateSettings({
+      model: "splash:mlx-community/Qwen3.8-27B-4bit",
+      automatic: true,
+      briefingModel: "copilot:claude-opus-5.5",
+      manualOnly: true
+    }),
+    {
+      model: "splash:mlx-community/Qwen3.8-27B-4bit",
+      automatic: false,
+      briefingModel: "copilot:claude-opus-5.5",
+      manualOnly: true
+    }
+  );
+
+  // GitHub Copilot provider (/models + /chat/completions with markdown-fenced JSON response)
+  const copilotHttp = fakeHttp([
+    jsonResponse({
+      data: [
+        {
+          id: "claude-opus-5.5",
+          name: "Claude Opus 5.5",
+          object: "model",
+          capabilities: { type: "chat", limits: { max_context_window_tokens: 1000000 } },
+          policy: { state: "enabled" }
+        }
+      ]
+    }),
+    jsonResponse({
+      choices: [{
+        finish_reason: "stop",
+        message: { role: "assistant", content: "```json\n" + JSON.stringify(OUTPUT) + "\n```" }
+      }]
+    })
+  ]);
+  const copilotOut = await summary.summarize(
+    { ...SOURCE, model: "copilot:claude-opus-5.5" },
+    { ...copilotHttp, apiKey: "gho_test_token" }
+  );
+  assert.deepEqual(copilotOut, OUTPUT);
+  assert.equal(copilotHttp.calls[0].url, "https://api.githubcopilot.com/models");
+  assert.equal(copilotHttp.calls[0].options.headers.Authorization, "Bearer gho_test_token");
+  assert.equal(copilotHttp.calls[0].options.headers["Copilot-Integration-Id"], "vscode-chat");
+  assert.equal(copilotHttp.calls[1].url, "https://api.githubcopilot.com/chat/completions");
+
+  // Anthropic provider (/v1/models + /v1/messages)
+  const anthropicHttp = fakeHttp([
+    jsonResponse({ data: [{ id: "claude-sonnet-4-5", display_name: "Claude Sonnet 4.5" }] }),
+    jsonResponse({
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: JSON.stringify(OUTPUT) }]
+    })
+  ]);
+  const anthropicOut = await summary.summarize(
+    { ...SOURCE, model: "anthropic:claude-sonnet-4-5" },
+    { ...anthropicHttp, apiKey: "sk-ant-test" }
+  );
+  assert.deepEqual(anthropicOut, OUTPUT);
+  assert.equal(anthropicHttp.calls[0].url, "https://api.anthropic.com/v1/models");
+  assert.equal(anthropicHttp.calls[0].options.headers["x-api-key"], "sk-ant-test");
+  assert.equal(anthropicHttp.calls[1].url, "https://api.anthropic.com/v1/messages");
+
+  // Google Gemini provider (/v1beta/openai/models + /v1beta/openai/chat/completions)
+  const geminiHttp = fakeHttp([
+    jsonResponse({ data: [{ id: "models/gemini-2.5-flash" }] }),
+    jsonResponse({
+      choices: [{ finish_reason: "stop", message: { role: "assistant", content: JSON.stringify(OUTPUT) } }]
+    })
+  ]);
+  const geminiOut = await summary.summarize(
+    { ...SOURCE, model: "gemini:gemini-2.5-flash" },
+    { ...geminiHttp, apiKey: "AIza_test" }
+  );
+  assert.deepEqual(geminiOut, OUTPUT);
+  assert.equal(geminiHttp.calls[0].url, "https://generativelanguage.googleapis.com/v1beta/openai/models");
+  assert.equal(geminiHttp.calls[1].url, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
 });
 
 test("summarizeBriefing synthesizes P1 notification summaries into a single <=250-word paragraph", async () => {
