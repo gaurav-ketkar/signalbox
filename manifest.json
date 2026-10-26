@@ -5,9 +5,10 @@
   "minimum_chrome_version": "120",
   "description": "Turn GitHub's notification firehose into pure signal with local AI summaries, Priority triage, Subscriptions, and one-click sweep.",
   "permissions": ["storage", "activeTab"],
-  "host_permissions": ["http://127.0.0.1/*"],
-  "optional_host_permissions": [
+  "host_permissions": [
+    "http://127.0.0.1/*",
     "https://api.githubcopilot.com/*",
+    "https://models.github.ai/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
     "https://generativelanguage.googleapis.com/*"

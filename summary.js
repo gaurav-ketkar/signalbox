@@ -24,6 +24,8 @@
   const BRIEFING_VERSION = 1;
   const DEFAULT_CONTEXT_WINDOW = 131072;
   const MAX_PARALLEL_SUMMARIES = 64;
+  const CLOUD_MAX_PARALLEL_SUMMARIES = 3;
+  const cloudModelsCache = new Map();
   const OUTPUT_TOKEN_RESERVE = 750;
   const DEFAULT_SETTINGS = Object.freeze({ model: "", automatic: false });
   const MODEL_NAME = /^[a-z\d][a-z\d._-]*(?:\/[a-z\d][a-z\d._-]*){0,2}(?::[a-z\d][a-z\d._-]*)?$/i;
@@ -136,15 +138,17 @@
 
   function validateSettings(value) {
     if (!isObject(value)) throw new LocalSummaryError("Summary settings must be an object with model and automatic fields.");
-    const model = validateModel(value.model, true);
+    const rawModel = value.model === "copilot:chamomile" ? "copilot:claude-sonnet-5.5" : value.model;
+    const model = validateModel(rawModel, true);
     if (typeof value.automatic !== "boolean") {
       throw new LocalSummaryError("The automatic summary setting must be true or false.");
     }
     if (value.automatic && !model) {
       throw new LocalSummaryError("Choose a local model before enabling automatic summaries.");
     }
-    const briefingModel = value.briefingModel === undefined || value.briefingModel === "" ?
-      "" : validateModel(value.briefingModel, true);
+    const rawBriefing = value.briefingModel === "copilot:chamomile" ? "copilot:claude-sonnet-5.5" : value.briefingModel;
+    const briefingModel = rawBriefing === undefined || rawBriefing === "" ?
+      "" : validateModel(rawBriefing, true);
     if (value.manualOnly !== undefined && typeof value.manualOnly !== "boolean") {
       throw new LocalSummaryError("The manualOnly summary setting must be true or false.");
     }
@@ -178,6 +182,9 @@
       }
     });
     return eligible.find((model) => model.id === "gemma4:12b-it-qat")?.id ||
+      eligible.find((model) => model.id === "copilot:claude-sonnet-5.5")?.id ||
+      eligible.find((model) => model.id === "copilot:openai/gpt-4.1-mini")?.id ||
+      eligible.find((model) => model.id === "copilot:gemini-3.8-flash")?.id ||
       eligible.filter((model) => model.loaded).sort(compareModels)[0]?.id ||
       eligible.sort(compareModels)[0]?.id || "";
   }
@@ -232,7 +239,10 @@
     return Math.ceil((SYSTEM_PROMPT.length + payload.length) / 4) + OUTPUT_TOKEN_RESERVE;
   }
 
-  function maxParallelSummaries(contextWindow = DEFAULT_CONTEXT_WINDOW, tokenCost = estimateTokens({})) {
+  function maxParallelSummaries(contextWindow = DEFAULT_CONTEXT_WINDOW, tokenCost = estimateTokens({}), model = "") {
+    if (typeof model === "string" && isCloudProvider(providerForModel(model))) {
+      return CLOUD_MAX_PARALLEL_SUMMARIES;
+    }
     const windowTokens = validContextWindow(contextWindow) || DEFAULT_CONTEXT_WINDOW;
     const itemTokens = typeof tokenCost === "number" && Number.isFinite(tokenCost) && tokenCost > 0 ?
       Math.ceil(tokenCost) : estimateTokens({});
@@ -281,14 +291,16 @@
     if (isCloudProvider(provider)) {
       if (!isObject(entry) || typeof entry.id !== "string" || !entry.id.trim()) return null;
       if (provider === "copilot") {
+        if (entry.model_picker_enabled === false) return null;
         if (entry.policy && entry.policy.state && entry.policy.state !== "enabled") return null;
+        if (Array.isArray(entry.supported_endpoints) && !entry.supported_endpoints.includes("/chat/completions")) return null;
         const isChat = entry.capabilities?.type === "chat" ||
           (Array.isArray(entry.supported_endpoints) && entry.supported_endpoints.includes("/chat/completions")) ||
           entry.capabilities === undefined;
         if (!isChat) return null;
       }
       const rawId = provider === "gemini" ? entry.id.replace(/^models\//, "") : entry.id.trim();
-      if (/^(?:whisper|tts|dall-e|text-embedding|omni-moderation|babbage|davinci|canary)/i.test(rawId)) return null;
+      if (/^(?:chamomile|whisper|tts|dall-e|text-embedding|omni-moderation|babbage|davinci|canary)/i.test(rawId)) return null;
       const id = `${provider}:${rawId}`;
       try {
         validateModel(id);
@@ -411,7 +423,13 @@
     if (isCloudProvider(provider)) {
       const server = serverLabelForProvider(provider);
       if (status === 401 || status === 403) {
+        if (provider === "copilot") {
+          return new LocalSummaryError(`GitHub Copilot rejected the token (HTTP ${status}). Run "gh auth token | pbcopy" in Terminal and paste that gho_... token in AI settings (web-UI fine-grained PATs are not accepted by api.githubcopilot.com).`);
+        }
         return new LocalSummaryError(`${server} rejected the API token (HTTP ${status}). Check your token or permissions in AI settings, then retry.`);
+      }
+      if (status === 400 && provider === "copilot") {
+        return new LocalSummaryError("GitHub Copilot does not support chat completions on the selected model (HTTP 400). Choose claude-sonnet-5.5, claude-opus-5.5, or gemini-3.8-flash in AI settings.");
       }
       if (status === 404) {
         return new LocalSummaryError(`${server} could not find the selected model (HTTP 404). Reconnect and choose an available model.`);
@@ -537,6 +555,13 @@
     if (isCloudProvider(provider) && (typeof apiKey !== "string" || !apiKey.trim())) {
       throw new LocalSummaryError(`Enter an API token for ${serverLabelForProvider(provider)} before connecting. Choose Splash, Ollama, LM Studio, or MLX for a local server.`);
     }
+    const cacheKey = fetchPage === fetch && isCloudProvider(provider) ? `${provider}:${apiKey.trim().slice(-12)}` : "";
+    if (cacheKey) {
+      const cached = cloudModelsCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < 60000) {
+        return cached.models;
+      }
+    }
     const usesDataArray = ["mlx", "splash", "copilot", "openai", "anthropic", "gemini"].includes(provider);
     const path = provider === "lmstudio" ? "/api/v1/models" :
       provider === "copilot" ? "/models" :
@@ -553,7 +578,11 @@
       if (model && (!models.has(model.id) || model.size < models.get(model.id).size)) models.set(model.id, model);
     }
     signal?.throwIfAborted();
-    return [...models.values()].sort(compareModels);
+    const sorted = [...models.values()].sort(compareModels);
+    if (cacheKey && sorted.length) {
+      cloudModelsCache.set(cacheKey, { at: Date.now(), models: sorted });
+    }
+    return sorted;
   }
 
   function validateSource(value) {

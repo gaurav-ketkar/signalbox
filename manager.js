@@ -227,9 +227,9 @@
 
   const API_KEY_HELP = {
     copilot: {
-      label: "GitHub Copilot token",
-      placeholder: "gho_... (run `gh auth token` in terminal)",
-      help: "Run `gh auth token` in your terminal and paste the token. Stored only in this Chrome profile."
+      label: "GitHub Copilot token (gh auth token)",
+      placeholder: "gho_... (run `gh auth token | pbcopy` in Terminal)",
+      help: "Run `gh auth token | pbcopy` in Terminal and paste that gho_... token here (web-UI fine-grained PATs are not accepted by api.githubcopilot.com)."
     },
     openai: {
       label: "OpenAI API key",

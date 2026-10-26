@@ -128,7 +128,7 @@ function drain() {
       (summary.contextWindowForModel ? summary.contextWindowForModel(job.model) : 131072);
     const tokens = job.tokens || (summary.estimateTokens ? summary.estimateTokens(job.source) : 2000);
     const maxParallel = summary.maxParallelSummaries ?
-      summary.maxParallelSummaries(contextWindow, tokens) :
+      summary.maxParallelSummaries(contextWindow, tokens, job.model) :
       Math.max(1, Math.min(64, Math.floor(contextWindow / tokens)));
     if (activeJobs > 0 && (activeTokens + tokens > contextWindow || activeJobs >= maxParallel)) {
       break;

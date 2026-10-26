@@ -1142,6 +1142,7 @@
     briefingTitleWrap.append(briefingEyebrow, briefingPill);
     const briefingRegenerate = button("Regenerate briefing", "gns-text-button gns-today-regenerate", () => {
       if (view && view.mode === "today") {
+        view.summariesPaused = false;
         view.briefingKey = "";
         view.briefingResult = null;
         view.briefingError = "";
@@ -1376,7 +1377,7 @@
       }
       const limit = current.contextWindow || summaryApi.DEFAULT_CONTEXT_WINDOW;
       const tokens = job.tokens || summaryApi.estimateTokens({});
-      const maxParallel = summaryApi.maxParallelSummaries(limit, tokens);
+      const maxParallel = summaryApi.maxParallelSummaries(limit, tokens, summarySettings.model);
       if (current.activeSummaries > 0 && (current.activeTokens + tokens > limit || current.activeSummaries >= maxParallel)) {
         break;
       }
@@ -1730,9 +1731,10 @@
       evidence.hidden = !result.evidence;
       if (result.evidence) aiAction.after(evidence);
       setText(evidenceText, result.evidence);
+      const isCloud = Boolean(summaryApi.isCloudProvider?.(summaryApi.providerForModel(record.model || summarySettings.model)));
       setText(aiCaution, record.truncated ? "Based on a shortened comment. Check the original for omitted details." : "");
       setText(aiMetadata, [`${result.response === "needs_response" ? "Needs your response" :
-        result.response === "fyi" ? "FYI" : "Recipient unclear"} (local AI)`,
+        result.response === "fyi" ? "FYI" : "Recipient unclear"} (${isCloud ? "cloud AI" : "local AI"})`,
       record.author ? `Source: ${record.author.startsWith("@") ? record.author : "@" + record.author}` : "Source author unavailable",
       record.dateTime ? new Date(record.dateTime).toLocaleString() : ""].filter(Boolean).join(" / "));
       const when = new Date(record.checkedAt).toLocaleString();
@@ -1841,9 +1843,10 @@
       const signal = AbortSignal.any([controller.signal, lifetime.signal, current.previewController.signal]);
       summaryRequest = controller;
       const model = summarySettings.model;
+      const isCloud = Boolean(summaryApi.isCloudProvider?.(summaryApi.providerForModel(model)));
       phase = "queued";
       clearSummary();
-      setText(aiStatus, "Waiting to summarize locally...");
+      setText(aiStatus, isCloud ? "Waiting to summarize with cloud model..." : "Waiting to summarize locally...");
       paintSummary();
       const initialTokens = summaryApi.estimateTokens({
         title: core.cleanText(item.title, 500),
@@ -1855,7 +1858,7 @@
         try {
           signal.throwIfAborted();
           phase = "running";
-          setText(aiStatus, "Checking the local model...");
+          setText(aiStatus, isCloud ? "Checking the cloud model..." : "Checking the local model...");
           paintSummary();
           if (!cached) {
             await checkModelOnce(current, model, signal);
@@ -2013,7 +2016,10 @@
       pending: () => ["queued", "running"].includes(phase),
       priority: () => computeItemPriority(current, item).score,
       finished: () => phase === "done",
+      failed: () => phase === "error",
+      errorMessage: () => aiStatus.textContent || "",
       getSummaryRecord: () => cached,
+      canAutoStart: () => !!target && !caughtUp(current, item) && phase === "idle",
       canStart: () => !!target && !caughtUp(current, item) && !["loading", "queued", "running", "done", "unavailable"].includes(phase),
       cancel: () => {
         lifetime.abort();
@@ -2323,16 +2329,25 @@
     }
     let waitingCount = 0;
     let startedAny = false;
+    let firstFailedMessage = "";
     for (const item of p1Items) {
       const tools = current.commentTools.get(item.key);
       if (!tools) continue;
-      if (tools.canStart()) {
+      if (force ? tools.canStart() : tools.canAutoStart()) {
         tools.startSummary();
         startedAny = true;
         waitingCount += 1;
+      } else if (tools.failed?.() && !firstFailedMessage) {
+        firstFailedMessage = tools.errorMessage?.() || "A P1 notification summary failed.";
       } else if (!tools.finished()) {
         waitingCount += 1;
       }
+    }
+    if (firstFailedMessage && waitingCount === 0 && !startedAny) {
+      current.briefingStatus.hidden = false;
+      setText(current.briefingStatus, `Morning briefing paused: ${firstFailedMessage}`);
+      current.briefingRegenerate.hidden = false;
+      return;
     }
     if (waitingCount > 0 || startedAny) {
       const doneCount = p1Items.length - waitingCount;
