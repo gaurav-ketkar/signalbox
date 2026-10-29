@@ -25,7 +25,13 @@
   let view = null;
   let nativeView = null;
   const SCAN_CACHE_PREFIX = "scan-cache:v1:";
-  const TODAY_BRIEFING_PREFIX = "today-briefing:v1:";
+  const TODAY_BRIEFING_PREFIX = "today-briefing:v2:";
+  const LEGACY_TODAY_BRIEFING_PREFIX = "today-briefing:v1:";
+  const BRIEFING_GROUPS = [
+    { response: "needs_response", label: "Needs your response" },
+    { response: "unclear", label: "Unclear asks" },
+    { response: "fyi", label: "FYI" }
+  ];
   const SCAN_CACHE_MS = 10 * 60 * 1000;
   const PRIORITY_CACHE_MS = 4 * 60 * 60 * 1000;
   const memorySummaries = new Map();
@@ -59,6 +65,7 @@
       const prefix = storeApi.CACHE_PREFIX;
       for (const [storageKey, record] of Object.entries(all)) {
         if (!storageKey.startsWith(prefix) || !record?.viewer || !record?.model || !record?.href) continue;
+        if (record.summaryVersion !== summaryApi.SUMMARY_VERSION) continue;
         const itemKey = (core.summaryTarget || core.commentTarget)(record.href)?.key;
         const memKey = memorySummaryKey(record.viewer, record.model, itemKey);
         if (memKey && !memorySummaries.has(memKey)) {
@@ -454,8 +461,8 @@
     if (!result?.ok) throw new Error(result?.error || "The subscription manager could not be opened. Use the extension's toolbar icon.");
   }
 
-  async function openSummarySettings() {
-    const result = await chrome.runtime.sendMessage({ type: "gns:open-summary-settings" });
+  async function openSummarySettings(section = "") {
+    const result = await chrome.runtime.sendMessage({ type: "gns:open-summary-settings", ...(section ? { section } : {}) });
     if (!result?.ok) throw new Error(result?.error || "AI settings could not be opened. Use the extension's toolbar icon.");
   }
 
@@ -466,6 +473,7 @@
       if (version !== summaryVersion) return;
       const modelChanged = saved.model !== summarySettings.model;
       const stoppedAutomatic = summarySettings.automatic && !saved.automatic;
+      const briefingStyleChanged = (saved.briefingInstructions || "") !== (summarySettings.briefingInstructions || "");
       summarySettings = saved;
       summarySettingsError = "";
       if (modelChanged) {
@@ -481,6 +489,7 @@
         if (modelChanged || saved.automatic) current.summariesPaused = false;
         for (const tools of current.commentTools.values()) tools.settingsChanged(modelChanged);
         renderSummaryControls(current);
+        if (briefingStyleChanged && current.mode === "today" && view === current) void updateTodayBriefing(current);
       }
     } catch (error) {
       if (version !== summaryVersion) return;
@@ -775,14 +784,14 @@
         todayLink.href = INBOX + core.TODAY_HASH;
         todayLink.dataset.gnsTodayFilter = "";
         todayLink.setAttribute("data-turbo", "false");
-        todayLink.title = "Today: Morning executive briefing for P1 notifications (Experimental)";
+        todayLink.title = "Today: your P1 notifications, summarized (Experimental)";
         todayLink.append(todayIcon(), element("span", "gns-today-filter-name", "Today"), element("span", "gns-count"));
         const todayLi = owned(element("li", "gns-sidebar-item"));
         todayLi.append(todayLink);
         list.prepend(todayLi);
       }
       setText(todayLink.querySelector(".gns-count"), todayCount);
-      todayLink.querySelector(".gns-count").title = "P1 notifications for Today's briefing";
+      todayLink.querySelector(".gns-count").title = "P1 notifications in Today's summary";
       if (activeMode === "today") todayLink.setAttribute("aria-current", "page");
       else todayLink.removeAttribute("aria-current");
 
@@ -1007,7 +1016,7 @@
   function makeView(root, mode = "subscriptions") {
     const panel = owned(element("section", "gns-panel"));
     panel.dataset.gnsPanel = mode;
-    panel.setAttribute("aria-label", mode === "today" ? "Today morning briefing" :
+    panel.setAttribute("aria-label", mode === "today" ? "Today's P1s" :
       mode === "priority" ? "Priority notifications" : "Subscribed notifications");
     const header = element("div", "gns-panel-header");
     const heading = element("div", "gns-heading-group");
@@ -1141,14 +1150,27 @@
 
     const briefingCard = element("section", "gns-today-briefing");
     briefingCard.dataset.gnsTodayBriefing = "";
-    briefingCard.setAttribute("aria-label", "Morning executive briefing");
     briefingCard.hidden = mode !== "today";
     const briefingHeader = element("div", "gns-today-briefing-header");
     const briefingTitleWrap = element("div", "gns-today-briefing-titles");
-    const briefingEyebrow = element("span", "gns-today-eyebrow", "Morning Executive Briefing");
-    const briefingPill = element("span", "gns-today-pill", "Experimental · P1 Priority");
-    briefingTitleWrap.append(briefingEyebrow, briefingPill);
-    const briefingRegenerate = button("Regenerate briefing", "gns-text-button gns-today-regenerate", () => {
+    const briefingHeading = element("h2", "gns-today-heading", "Today's P1s, summarized");
+    briefingHeading.id = `gns-today-heading-${mode}`;
+    briefingCard.setAttribute("aria-labelledby", briefingHeading.id);
+    const briefingPill = element("span", "gns-today-pill", "Experimental");
+    briefingTitleWrap.append(briefingHeading, briefingPill);
+    const briefingActions = element("div", "gns-today-actions");
+    const briefingEditStyle = button("Edit prompt", "gns-text-button gns-today-regenerate", async () => {
+      try {
+        await openSummarySettings("briefing-style");
+      } catch (error) {
+        if (view) {
+          view.briefingStatus.hidden = false;
+          setText(view.briefingStatus, errorText(error));
+        }
+      }
+    });
+    briefingEditStyle.title = "Change how Today's P1s are summarized";
+    const briefingRegenerate = button("Regenerate", "gns-text-button gns-today-regenerate", () => {
       if (view && view.mode === "today") {
         view.summariesPaused = false;
         view.briefingKey = "";
@@ -1160,17 +1182,21 @@
       }
     });
     briefingRegenerate.hidden = true;
-    briefingHeader.append(briefingTitleWrap, briefingRegenerate);
+    briefingRegenerate.setAttribute("aria-label", "Regenerate Today's P1 summary");
+    briefingActions.append(briefingEditStyle, briefingRegenerate);
+    briefingHeader.append(briefingTitleWrap, briefingActions);
     const briefingStatus = element("p", "gns-today-status");
     briefingStatus.setAttribute("role", "status");
     const briefingWarning = element("p", "gns-today-fallback");
     briefingWarning.setAttribute("role", "status");
     briefingWarning.hidden = true;
-    const briefingText = element("p", "gns-today-paragraph");
-    briefingText.hidden = true;
+    const briefingHeadline = element("p", "gns-today-headline");
+    briefingHeadline.hidden = true;
+    const briefingBody = element("div", "gns-today-groups");
+    briefingBody.hidden = true;
     const briefingMeta = element("p", "gns-today-meta");
     briefingMeta.hidden = true;
-    briefingCard.append(briefingHeader, briefingStatus, briefingWarning, briefingText, briefingMeta);
+    briefingCard.append(briefingHeader, briefingStatus, briefingWarning, briefingHeadline, briefingBody, briefingMeta);
 
     const error = element("p", "gns-error");
     error.setAttribute("role", "alert");
@@ -1191,7 +1217,7 @@
       rendered: new Map(), controller: null, previewController: new AbortController(), commentTools: new Map(),
       authors: new Map(), responses: new Map(), kevScores: new Map(), kevOffline: false, kevDone: false,
       priorityOrder: null, prioritySnapshot: null,
-      briefingCard, briefingStatus, briefingWarning, briefingText, briefingMeta, briefingRegenerate,
+      briefingCard, briefingStatus, briefingWarning, briefingHeadline, briefingBody, briefingMeta, briefingRegenerate,
       briefingKey: "", briefingResult: null, briefingError: "", briefingRequest: null,
       sweepBar, sweepReview, sweepTeam, sweepParticipating, sweepAll, sweepStatus, sweeping: false, sweepMessage: "",
       summaryNote, summarize, stopSummaries: stop, summarySettingsButton: settings,
@@ -2271,6 +2297,27 @@
     return row;
   }
 
+  function hideTodayBriefingBody(current) {
+    current.briefingHeadline.hidden = true;
+    current.briefingBody.hidden = true;
+    current.briefingBody.replaceChildren();
+    current.briefingMeta.hidden = true;
+  }
+
+  function briefingItemNode(entry) {
+    const li = element("li", "gns-today-item");
+    const head = element("div", "gns-today-item-head");
+    const href = core.parseItem(entry.href || "") ? entry.href : "";
+    const title = element(href ? "a" : "span", "gns-today-item-title", entry.title || entry.label);
+    if (href) title.href = href;
+    head.append(title);
+    if (entry.title && entry.title !== entry.label) {
+      head.append(element("span", "gns-today-item-ref", entry.label));
+    }
+    li.append(head, element("p", "gns-today-item-line", entry.line));
+    return li;
+  }
+
   function renderSavedTodayBriefing(current, saved) {
     current.briefingResult = saved;
     current.briefingStatus.hidden = true;
@@ -2278,36 +2325,55 @@
       current.briefingWarning.hidden = !saved.fallbackWarning;
       setText(current.briefingWarning, saved.fallbackWarning || "");
     }
-    current.briefingText.hidden = false;
-    setText(current.briefingText, saved.briefing);
+    current.briefingHeadline.hidden = !saved.headline;
+    setText(current.briefingHeadline, saved.headline || "");
+    const groups = [];
+    for (const group of BRIEFING_GROUPS) {
+      const entries = saved.items.filter((entry) => (entry.response || "unclear") === group.response);
+      if (!entries.length) continue;
+      const section = element("section", `gns-today-group gns-today-group-${group.response.replace("_", "-")}`);
+      const heading = element("h3", "gns-today-group-label");
+      heading.append(element("span", "", group.label), element("span", "gns-today-group-count", String(entries.length)));
+      const list = element("ol", "gns-today-items");
+      list.append(...entries.map(briefingItemNode));
+      section.append(heading, list);
+      groups.push(section);
+    }
+    current.briefingBody.replaceChildren(...groups);
+    current.briefingBody.hidden = !groups.length;
     current.briefingMeta.hidden = false;
-    const wordCount = saved.briefing.trim().split(/\s+/).filter(Boolean).length;
     const timeLabel = saved.generatedAt ?
       new Date(saved.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
     const countLabel = saved.itemCount ?
-      `Synthesized from ${saved.itemCount} P1 ${saved.itemCount === 1 ? "notification" : "notifications"}` :
+      `From ${saved.itemCount} P1 ${saved.itemCount === 1 ? "notification" : "notifications"}` :
       "Saved for today";
     const effectiveModel = saved.usedModel || saved.model || summarySettings.model;
     setText(current.briefingMeta, [
       countLabel,
       timeLabel ? `saved today at ${timeLabel}` : "",
-      `${wordCount} words`,
-      `${aiModeLabel(effectiveModel)} (${effectiveModel})`
+      `${aiModeLabel(effectiveModel)} (${effectiveModel})`,
+      saved.instructions ? "custom prompt" : ""
     ].filter(Boolean).join(" · "));
     current.briefingRegenerate.hidden = false;
   }
 
+  function isValidSavedBriefing(record, model, instructions, now) {
+    return Boolean(record && record.version === 2 && typeof record.headline === "string" &&
+      Array.isArray(record.items) && record.items.length && record.items.every((entry) =>
+        entry && ["label", "title", "href", "response", "line"].every((field) => typeof entry[field] === "string")) &&
+      record.model === model && (record.instructions || "") === instructions &&
+      Number.isFinite(record.generatedAt) && sameLocalDay(record.generatedAt, now));
+  }
+
   async function loadSavedTodayBriefing(viewer, model) {
     const storageKey = todayBriefingStorageKey(viewer);
+    const instructions = summarySettings.briefingInstructions || "";
     const now = Date.now();
     const mem = memoryBriefings.get(storageKey);
-    if (mem && mem.model === model && sameLocalDay(mem.generatedAt, now)) {
-      return mem;
-    }
+    if (isValidSavedBriefing(mem, model, instructions, now)) return mem;
     try {
       const stored = (await chrome.storage.local.get(storageKey))?.[storageKey];
-      if (stored && typeof stored.briefing === "string" && stored.briefing.trim() &&
-          stored.model === model && Number.isFinite(stored.generatedAt) && sameLocalDay(stored.generatedAt, now)) {
+      if (isValidSavedBriefing(stored, model, instructions, now)) {
         memoryBriefings.set(storageKey, stored);
         return stored;
       }
@@ -2322,6 +2388,7 @@
     memoryBriefings.set(storageKey, record);
     try {
       await chrome.storage.local.set({ [storageKey]: record });
+      await chrome.storage.local.remove(`${LEGACY_TODAY_BRIEFING_PREFIX}${viewer || "default"}`);
     } catch {
       // In-memory cache still holds today's briefing if storage write fails.
     }
@@ -2335,9 +2402,8 @@
       current.briefingStatus.hidden = false;
       setText(current.briefingStatus, summarySettingsError ?
         `AI settings need attention: ${summarySettingsError}` :
-        "Choose a local or cloud model in AI settings to generate your morning executive briefing.");
-      current.briefingText.hidden = true;
-      current.briefingMeta.hidden = true;
+        "Choose a local or cloud model in AI settings to summarize Today's P1s.");
+      hideTodayBriefingBody(current);
       current.briefingRegenerate.hidden = true;
       return;
     }
@@ -2355,17 +2421,16 @@
     if (!current.state.complete) {
       current.briefingStatus.hidden = false;
       setText(current.briefingStatus, "Scanning your inbox for P1 notifications...");
-      current.briefingText.hidden = true;
-      current.briefingMeta.hidden = true;
+      hideTodayBriefingBody(current);
       current.briefingRegenerate.hidden = true;
       return;
     }
     const p1Items = [...current.rendered.keys()].map((key) => current.items.get(key)).filter(Boolean);
     if (!p1Items.length) {
       current.briefingStatus.hidden = true;
-      current.briefingText.hidden = false;
-      setText(current.briefingText, "No P1 fires are waiting on you right now. Your inbox is clear of urgent blockers and direct leadership asks.");
-      current.briefingMeta.hidden = true;
+      hideTodayBriefingBody(current);
+      current.briefingHeadline.hidden = false;
+      setText(current.briefingHeadline, "No P1s are waiting on you right now. Nothing urgent or blocking, and no direct leadership asks.");
       current.briefingRegenerate.hidden = true;
       return;
     }
@@ -2387,34 +2452,36 @@
     }
     if (firstFailedMessage && waitingCount === 0 && !startedAny) {
       current.briefingStatus.hidden = false;
-      setText(current.briefingStatus, `Morning briefing paused: ${firstFailedMessage}`);
+      setText(current.briefingStatus, `Today's P1 summary paused: ${firstFailedMessage}`);
       current.briefingRegenerate.hidden = false;
       return;
     }
     if (waitingCount > 0 || startedAny) {
       const doneCount = p1Items.length - waitingCount;
       current.briefingStatus.hidden = false;
-      setText(current.briefingStatus, `Reading P1 threads (${doneCount} of ${p1Items.length} summarized) before writing your morning briefing...`);
-      if (!current.briefingResult) {
-        current.briefingText.hidden = true;
-        current.briefingMeta.hidden = true;
-      }
+      setText(current.briefingStatus, `Reading P1 threads (${doneCount} of ${p1Items.length} summarized) before summarizing Today's P1s...`);
+      if (!current.briefingResult) hideTodayBriefingBody(current);
       current.briefingRegenerate.hidden = true;
       return;
     }
 
     const briefingItems = [];
+    const linksByLabel = new Map();
     for (const item of p1Items) {
       const tools = current.commentTools.get(item.key);
       const record = tools?.getSummaryRecord?.() ||
         memorySummaries.get(memorySummaryKey(current.viewer, summarySettings.model, item.key));
       if (!record?.result) continue;
       const priority = computeItemPriority(current, item);
+      const author = record.author || item.participants?.[0]?.username || "";
+      const authorLogin = core.normalizeLogin(String(author).replace(/^@/, ""));
+      const contacts = priorityRules.contacts || {};
+      linksByLabel.set(item.label, { title: item.title || item.label, href: item.href || "" });
       briefingItems.push({
         label: item.label,
         title: item.title,
-        author: record.author || item.participants?.[0]?.username || "",
-        role: priority.orgMatch?.role || "",
+        author,
+        role: authorLogin && Object.hasOwn(contacts, authorLogin) ? contacts[authorLogin].role || "" : "",
         reason: item.reason || "",
         score: priority.score,
         response: current.responses.get(item.key) || record.result.response || "unclear",
@@ -2428,6 +2495,7 @@
     const key = [
       current.viewer || "anon",
       activeBriefingModel,
+      summarySettings.briefingInstructions || "",
       ...briefingItems.map((entry) => `${entry.label}:${entry.score}:${entry.response}:${entry.summary}`)
     ].join("|");
 
@@ -2442,7 +2510,7 @@
     current.briefingKey = key;
     current.briefingError = "";
     current.briefingStatus.hidden = false;
-    setText(current.briefingStatus, `Drafting your morning executive briefing with ${activeBriefingModel}...`);
+    setText(current.briefingStatus, `Summarizing Today's P1s with ${activeBriefingModel}...`);
     current.briefingRegenerate.hidden = true;
 
     try {
@@ -2461,8 +2529,21 @@
       });
       signal.throwIfAborted();
       if (view !== current) return;
+      const instructions = summarySettings.briefingInstructions || "";
       const savedRecord = {
-        briefing: result.briefing,
+        version: 2,
+        headline: typeof result.headline === "string" ? result.headline : "",
+        items: (Array.isArray(result.items) ? result.items : []).map((entry) => {
+          const link = linksByLabel.get(entry?.label);
+          return link && typeof entry.line === "string" ? {
+            label: entry.label,
+            title: link.title,
+            href: link.href,
+            response: ["needs_response", "fyi", "unclear"].includes(entry.response) ? entry.response : "unclear",
+            line: entry.line
+          } : null;
+        }).filter(Boolean),
+        ...(instructions ? { instructions } : {}),
         generatedAt: Date.now(),
         model: activeBriefingModel,
         ...(result.usedModel ? { usedModel: result.usedModel } : {}),
@@ -2476,7 +2557,7 @@
       if (signal.aborted || view !== current) return;
       current.briefingError = errorText(error);
       current.briefingStatus.hidden = false;
-      setText(current.briefingStatus, `Morning briefing could not be generated: ${current.briefingError}`);
+      setText(current.briefingStatus, `Today's P1 summary could not be generated: ${current.briefingError}`);
       current.briefingRegenerate.hidden = false;
     } finally {
       if (current.briefingRequest === controller) {
@@ -2617,8 +2698,8 @@
     current.refresh.disabled = !ready;
     current.empty.hidden = visible.length > 0;
     current.add.hidden = !ready || hasItems;
-    let emptyTitle = isToday ? "Loading Today's P1 briefing" : isPriority ? "Loading priority notifications" : "Loading subscriptions";
-    let emptyText = isToday ? "Scanning your inbox for P1 notifications and preparing your morning executive briefing." :
+    let emptyTitle = isToday ? "Loading Today's P1s" : isPriority ? "Loading priority notifications" : "Loading subscriptions";
+    let emptyText = isToday ? "Scanning your inbox for P1 notifications and summarizing them." :
       isPriority ? "Scanning your inbox for direct asks, leadership activity, and recent updates." : "Your saved list will appear here.";
     if (ready && !hasItems) {
       emptyTitle = "Choose what belongs here";

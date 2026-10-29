@@ -78,7 +78,7 @@ FORM: A compact list editor extending GitHub's established interface. No concept
       <section id="summaries" class="saved-section" aria-labelledby="summaries-heading">
         <div class="section-intro">
           <h2 id="summaries-heading">AI summaries &amp; model routing</h2>
-          <p class="help">Use a $0 local model on this Mac (Splash, LM Studio, Ollama, or MLX) or connect GitHub Copilot, OpenAI, Anthropic, or Gemini. Route row summaries and your Today executive briefing independently.</p>
+          <p class="help">Use a $0 local model on this Mac (Splash, LM Studio, Ollama, or MLX) or connect GitHub Copilot, OpenAI, Anthropic, or Gemini. Route row summaries and Today's P1s to different models if you like.</p>
         </div>
 
         <form id="summary-form">
@@ -123,10 +123,10 @@ FORM: A compact list editor extending GitHub's established interface. No concept
 
             <div class="model-slot briefing-routing-box">
               <div class="slot-header">
-                <h3>Today's Executive Briefing</h3>
-                <span class="slot-badge">Once/day · P1 synthesis</span>
+                <h3>Today's P1s, summarized</h3>
+                <span class="slot-badge">Once a day · Today view</span>
               </div>
-              <p class="help">Synthesizes P1 summaries into one morning paragraph (~1,000 tokens/day).</p>
+              <p class="help">Turns your P1 row summaries into a short, scannable list (~1,000 tokens/day).</p>
 
               <label class="server-label" for="briefing-server">Provider override</label>
               <select id="briefing-server">
@@ -147,19 +147,39 @@ FORM: A compact list editor extending GitHub's established interface. No concept
 
               <div id="briefing-override-controls" hidden>
                 <div id="briefing-api-key-group" class="api-key-group" hidden>
-                  <label class="server-label" for="briefing-api-key" id="briefing-api-key-label">Briefing provider API token</label>
+                  <label class="server-label" for="briefing-api-key" id="briefing-api-key-label">API token for Today's P1s</label>
                   <input id="briefing-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your token or API key">
                 </div>
-                <label class="server-label" for="briefing-model">Briefing model</label>
+                <label class="server-label" for="briefing-model">Model for Today's P1s</label>
                 <div class="connect-row">
                   <select id="briefing-model" disabled>
                     <option value="">Connect to list available models</option>
                   </select>
-                  <button id="connect-briefing-models" type="button">Connect briefing provider</button>
+                  <button id="connect-briefing-models" type="button">Connect</button>
                 </div>
               </div>
             </div>
           </div>
+
+          <details id="briefing-style" class="prompt-editor">
+            <summary>
+              <span class="prompt-editor-title">Edit the Today's P1s prompt</span>
+              <span id="briefing-style-state" class="slot-badge">Default</span>
+            </summary>
+            <div class="prompt-editor-body">
+              <p class="help">Change the tone, length, or focus of each line. Signalbox adds fixed rules after your text, so the list format, links, and full titles always stay the same.</p>
+              <label for="briefing-instructions">Style instructions</label>
+              <textarea id="briefing-instructions" rows="9" maxlength="2000" spellcheck="true" aria-describedby="briefing-instructions-count"></textarea>
+              <div class="prompt-editor-footer">
+                <span id="briefing-instructions-count" class="help" aria-live="polite">0 / 2,000 characters</span>
+                <button id="reset-briefing-instructions" class="text-button" type="button">Reset to default</button>
+              </div>
+              <details class="prompt-rules">
+                <summary>Fixed rules Signalbox always adds</summary>
+                <pre id="briefing-rules"></pre>
+              </details>
+            </div>
+          </details>
 
           <div class="summary-behavior-group">
             <label class="checkbox-label" for="summary-automatic">

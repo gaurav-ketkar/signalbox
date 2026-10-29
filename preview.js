@@ -7,15 +7,29 @@
   "use strict";
 
   const BODY_SELECTOR = ".js-comment-body, .comment-body, [data-testid='comment-body'], [data-testid='markdown-body'], .markdown-body, .markdown-body-short";
+  // GitHub server-renders comment composers and edit forms with a markdown preview pane that reuses
+  // the .comment-body/.markdown-body classes and contains the placeholder "Nothing to preview".
+  const COMPOSER_PREVIEW_SELECTOR = ".js-preview-body, .js-preview-panel, .preview-content";
+  const PLACEHOLDER_TEXT = /^(?:nothing to preview|loading preview(?:…|\.{3})?)$/i;
   const LIMIT = 12000;
+
+  function isComposerPreview(node) {
+    return Boolean(node.closest?.(COMPOSER_PREVIEW_SELECTOR));
+  }
+
+  function contentBodies(nodes) {
+    const candidates = nodes.filter((node) => !isComposerPreview(node));
+    return candidates.filter((node) => !candidates.some((other) => other !== node && other.contains(node)));
+  }
 
   function cleanBodyNode(node) {
     const body = node.cloneNode(true);
-    body.querySelectorAll("script, style, template, noscript, iframe, object, form, button, input, svg").forEach((child) => child.remove());
+    body.querySelectorAll(`script, style, template, noscript, iframe, object, form, button, input, svg, ${COMPOSER_PREVIEW_SELECTOR}`).forEach((child) => child.remove());
     body.querySelectorAll("br").forEach((child) => child.replaceWith("\n"));
     body.querySelectorAll("p, div, pre, blockquote, li, h1, h2, h3, h4, h5, h6, tr").forEach((child) => child.append("\n"));
     body.querySelectorAll("img").forEach((child) => child.replaceWith(child.alt ? `[Image: ${child.alt}]` : "[Image]"));
-    return (body.textContent || "").replace(/\r\n?/g, "\n").replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n").trim();
+    const text = (body.textContent || "").replace(/\r\n?/g, "\n").replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n").trim();
+    return PLACEHOLDER_TEXT.test(text) ? "" : text;
   }
 
   function cleanHtmlFragment(html, document) {
@@ -131,8 +145,7 @@
     }
 
     if (typeof document.querySelectorAll !== "function") return null;
-    const allCandidates = [...document.querySelectorAll(BODY_SELECTOR)];
-    const topBodies = allCandidates.filter((node) => !allCandidates.some((other) => other !== node && other.contains(node)));
+    const topBodies = contentBodies([...document.querySelectorAll(BODY_SELECTOR)]);
     const parsedBodies = [];
     for (const bodyNode of topBodies) {
       const text = cleanBodyNode(bodyNode);
@@ -202,8 +215,7 @@
       let container = anchor;
       for (let depth = 0; container && depth < 6; depth++, container = container.parentElement) {
         if (container.matches("body, main, [role='main'], .js-discussion, .js-discussion-timeline")) break;
-        const candidates = container.matches(BODY_SELECTOR) ? [container] : [...container.querySelectorAll(BODY_SELECTOR)];
-        const bodies = candidates.filter((node) => !candidates.some((other) => other !== node && other.contains(node)));
+        const bodies = contentBodies(container.matches(BODY_SELECTOR) ? [container] : [...container.querySelectorAll(BODY_SELECTOR)]);
         if (bodies.length > 1) {
           if (!allowFallback) return null;
           break;

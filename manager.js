@@ -321,6 +321,8 @@
     byId("disable-summaries").hidden = !summarySettings.model && summaryLoaded;
     byId("disable-summaries").textContent = summaryLoaded ? "Turn off summaries" : "Reset AI settings";
     byId("disable-summaries").disabled = summaryBusy;
+    if (byId("briefing-instructions")) byId("briefing-instructions").disabled = summaryBusy;
+    renderBriefingInstructionsState();
   }
 
   function modelOptions(selected) {
@@ -346,6 +348,36 @@
     summaryControls();
   }
 
+  function briefingInstructionsValue() {
+    return byId("briefing-instructions")?.value ?? "";
+  }
+
+  function renderBriefingInstructionsState() {
+    const field = byId("briefing-instructions");
+    if (!field) return;
+    const text = field.value.replace(/\r\n?/g, "\n").trim();
+    const custom = Boolean(text) && text !== summary.DEFAULT_BRIEFING_INSTRUCTIONS;
+    byId("briefing-style-state").textContent = custom ? "Custom" : "Default";
+    byId("briefing-style-state").classList.toggle("is-custom", custom);
+    byId("briefing-instructions-count").textContent =
+      `${field.value.length.toLocaleString("en-US")} / ${summary.MAX_BRIEFING_INSTRUCTIONS.toLocaleString("en-US")} characters`;
+    byId("reset-briefing-instructions").disabled = summaryBusy || !custom;
+  }
+
+  function setBriefingInstructions(value) {
+    const field = byId("briefing-instructions");
+    if (!field) return;
+    field.value = value || summary.DEFAULT_BRIEFING_INSTRUCTIONS;
+    renderBriefingInstructionsState();
+  }
+
+  function openBriefingStyleFromHash() {
+    const details = byId("briefing-style");
+    if (!details || location.hash !== "#briefing-style") return;
+    details.open = true;
+    details.scrollIntoView({ block: "start" });
+  }
+
   async function loadSummarySettings() {
     const version = ++summaryLoadVersion;
     try {
@@ -366,6 +398,7 @@
           byId("briefing-server").value = saved.briefingModel ? summary.providerForModel(saved.briefingModel) : "";
           briefingModelOptions(saved.briefingModel || "");
         }
+        setBriefingInstructions(saved.briefingInstructions);
       }
       summaryControls();
     } catch (error) {
@@ -484,6 +517,14 @@
     summaryControls();
   });
 
+  byId("reset-briefing-instructions")?.addEventListener("click", () => {
+    setBriefingInstructions("");
+    summaryDirty = true;
+    clearSummaryError();
+    summaryControls();
+    byId("briefing-instructions").focus();
+  });
+
   byId("summary-form").addEventListener("input", () => {
     summaryDirty = true;
     clearSummaryError();
@@ -526,8 +567,10 @@
         model,
         automatic: manualOnly ? false : byId("summary-automatic").checked,
         ...(briefingModel ? { briefingModel } : {}),
-        ...(manualOnly ? { manualOnly: true } : {})
+        ...(manualOnly ? { manualOnly: true } : {}),
+        briefingInstructions: briefingInstructionsValue()
       });
+      setBriefingInstructions(summarySettings.briefingInstructions);
       summaryDirty = false;
       byId("summary-status").textContent = summarySettings.automatic ?
         "Saved. Linked comments will be summarized when you open a notifications view." :
@@ -554,6 +597,7 @@
       briefingModelOptions("");
       byId("summary-automatic").checked = false;
       if (byId("summary-manual-only")) byId("summary-manual-only").checked = false;
+      setBriefingInstructions("");
       byId("summary-status").textContent = "Summaries are off. Your subscriptions are unchanged.";
     } catch (error) {
       summaryError(error);
@@ -655,6 +699,10 @@
   });
   void load().catch(showError);
   void loadPriorityRules();
+  if (byId("briefing-rules")) byId("briefing-rules").textContent = summary.BRIEFING_RULES;
+  setBriefingInstructions("");
+  window.addEventListener("hashchange", openBriefingStyleFromHash);
+  openBriefingStyleFromHash();
   void loadSummarySettings();
   void readCurrentPage();
   void loadLocalDataCounts().catch(localDataError);

@@ -10,7 +10,7 @@
 
 Signalbox is an unpacked Chrome extension that adds **Today**, **Priority**, and **Subscriptions** views to GitHub notifications, summarizes threads inline across *every* filter view using local AI (Splash, Apple MLX, LM Studio, or Ollama) or optional cloud models (**GitHub Copilot**, **OpenAI**, **Anthropic**, **Google Gemini**), and sweeps noisy notifications in one click.
 
-No build step required. Keep costs at **$0** with 100% local inference, or mix and match—such as local models for bulk row summaries and a frontier cloud/Copilot model for your once-a-day **Today** executive briefing.
+No build step required. Keep costs at **$0** with 100% local inference, or mix and match—such as local models for bulk row summaries and a frontier cloud/Copilot model for your once-a-day **Today's P1s** summary.
 
 ![Demo of Signalbox](docs/demo.gif)
 
@@ -18,7 +18,7 @@ No build step required. Keep costs at **$0** with 100% local inference, or mix a
 
 ## Highlights
 
-- **Morning Executive Briefing in `Today` (`#today`):** Automatically summarizes your **P1 Priority** notifications and synthesizes a single-paragraph (<250-word) morning executive briefing right above the P1 threads—crafted around Joel Schwartzberg's *Get to the Point* and Paul Graham's *Write Like You Talk* / *How to Write Usefully*.
+- **Today's P1s, summarized (`#today`):** Summarizes your **P1 Priority** notifications into a one-line headline and a short list grouped by **Needs your response**, **Unclear asks**, and **FYI**. Each item links the full issue or PR title. You can edit the prompt's style instructions in settings.
 - **Inline AI summaries on every filter view (without losing unread state):** Works in `Inbox`, `Mentioned`, `Assigned`, `Participating`, custom filters, **Today**, **Priority**, and **Subscriptions**. Unread notifications that get summarized are automatically restored to unread (`POST /notifications/beta/unmark`) right after their source page is fetched. Every summary addresses you in the second person, leads with a status pill (**`Needs your response`**, **`FYI`**, or **`Unclear ask`**), and cites a verbatim quote when you're mentioned.
 - **Smart `Priority` view (`#priority`):** Ranks notifications (0–100) by direct asks, your team/repo rules, and a 72-hour SLA recency curve. Pins the list for 4 hours so rows never jump around while you work through them.
 - **Deliberate `Subscriptions` view (`#subscriptions`):** Bookmark specific issues, PRs, discussions, releases, or commits from anywhere on GitHub and track them in one calm view across all inbox pages.
@@ -41,7 +41,7 @@ No build step required. Keep costs at **$0** with 100% local inference, or mix a
 ### 1. Connect a Local or Cloud Model
 1. Click the **Signalbox** toolbar icon $\rightarrow$ **Manage list** (or click **Set up local summaries** on `github.com/notifications`).
 2. Pick your **Row summaries provider** (**Splash**, **Local MLX**, **LM Studio**, **Ollama**, or **GitHub Copilot** / **OpenAI** / **Anthropic** / **Google Gemini**), click **Connect**, select a model, and click **Save summary settings**.
-3. *(Optional)* Under **Today's Executive Briefing model**, keep **"Same as row summaries model"** or pick a dedicated frontier model (e.g., `copilot:claude-opus-5.5` via `gh auth token`) just for the once-a-day morning synthesis.
+3. *(Optional)* Under **Model for Today's P1s**, keep **"Same as row summaries model"** or pick a dedicated frontier model (e.g., `copilot:claude-opus-5.5` via `gh auth token`) just for the once-a-day summary. Open **Edit the Today's P1s prompt** to change its tone or focus.
 
 ### 2. Customize Priority Rules (Optional)
 Open the extension's **Manage list** page (`manager.html`) and edit **Priority filter rules**—or create a gitignored `priority-config.local.json` in the repo root:

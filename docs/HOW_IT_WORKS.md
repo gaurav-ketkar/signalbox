@@ -8,7 +8,12 @@ This document covers the architecture, filtering behavior, local AI summarizatio
 
 Signalbox places **Today**, **Priority**, and **Subscriptions** at the very top of your GitHub notifications **Filters** sidebar:
 
-- **Today (`#today` / `today:only` — Experimental):** Filters your inbox to **P1 Priority** notifications (`score >= 70`), automatically summarizes any un-summarized P1 threads, and writes a single-paragraph (<250-word) **Morning Executive Briefing** at the top of the page above the P1 rows. The synthesis prompt is built on Joel Schwartzberg's *Get to the Point* (lead with the point, pass the "I believe that" test) and Paul Graham's *Write Like You Talk* (`paulgraham.com/talk.html`) and *How to Write Usefully* (`paulgraham.com/useful.html`).
+- **Today (`#today` / `today:only` — Experimental):** Filters your inbox to **P1 Priority** notifications (`score >= 70`), automatically summarizes any un-summarized P1 threads, and shows **Today's P1s, summarized** above the P1 rows.
+  - **What the model gets:** For each P1, its `owner/repo#N` label, title, the latest commenter and their role from your Priority rules, the priority reason and score, and the row summary (response, summary, action, and quoted evidence).
+  - **What the model returns:** JSON only: a `headline` (the first thing to do, up to 240 characters) and one `line` per item (up to 220 characters), keyed by the supplied labels. Signalbox drops unknown labels and fills in any skipped item from its row summary.
+  - **What you see:** Signalbox builds the list itself. Items are grouped into **Needs your response**, **Unclear asks**, and **FYI**, and each shows the full title as a link plus the `owner/repo#N` reference. Model text is shown as plain text, never as HTML or Markdown.
+  - **The prompt:** Fixed rules (format, safety, and length) followed by your style instructions. The default style is built on Joel Schwartzberg's *Get to the Point* and Paul Graham's *Write Like You Talk* (`paulgraham.com/talk.html`) and *How to Write Usefully* (`paulgraham.com/useful.html`). Edit it under **Settings → Edit the Today's P1s prompt** (up to 2,000 characters). The fixed rules are shown read-only and can't be changed.
+  - **Caching:** The result is saved once per day and reused for the rest of that day, even if new P1s arrive. It is regenerated the next day, when you change the model or style instructions, or when you click **Regenerate**.
 - **Priority (`#priority` / `priority:only`):** Scores every inbox notification on a **0–100 scale** (`PRIORITY_THRESHOLD = 35`):
 
 - **Direct Ask & Signal (0–45 pts):**
@@ -73,7 +78,7 @@ Summaries default to 100% local loopback endpoints (**Splash** by default), with
 
 ### Two-Slot Hybrid Routing & Near-Zero-Cost Controls
 - **Slot 1 — Row Summaries (`#summary-model`):** Used for individual notification rows across `Inbox`, `Priority`, `Subscriptions`, and native filters.
-- **Slot 2 — Today's Executive Briefing (`#briefing-model`):** Defaults to your Row Summaries model, or lets you pick a dedicated frontier model (such as `copilot:claude-opus-5.5`, `anthropic:claude-opus-4-5`, or `gemini:gemini-2.5-pro`) strictly for the once-per-day `#today` synthesis (~1,000 input tokens/day).
+- **Slot 2 — Today's P1s (`#briefing-model`):** Defaults to your Row Summaries model, or lets you pick a dedicated frontier model (such as `copilot:claude-opus-5.5`, `anthropic:claude-opus-4-5`, or `gemini:gemini-2.5-pro`) strictly for the once-per-day `#today` summary (~1,000 input tokens/day).
 - **Manual row clicks only (`manualOnly`):** Disables bulk `Summarize comments` and automatic on-load summarization so cloud tokens are only spent when you explicitly click `Summarize` on a specific row.
 
 ### Splash Setup

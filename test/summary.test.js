@@ -213,9 +213,9 @@ test("invalid local server choices cannot become arbitrary endpoints", async () 
 test("summary exposes the exact CommonJS and browser-global API without dependencies", () => {
   assert.equal(globalThis.GitHubSubscriptionSummary, summary);
   assert.deepEqual(Object.keys(summary).sort(), [
-    "ALL_PROVIDERS", "ANTHROPIC_ORIGIN", "BRIEFING_VERSION", "CLOUD_PROVIDERS", "COPILOT_ORIGIN",
-    "CREDENTIALS_STORAGE_KEY", "DEFAULT_CONTEXT_WINDOW", "DEFAULT_SETTINGS", "GEMINI_ORIGIN",
-    "KEV_ORIGIN", "LM_STUDIO_ORIGIN", "LOCAL_PROVIDERS", "MAX_PARALLEL_SUMMARIES", "MLX_ORIGIN",
+    "ALL_PROVIDERS", "ANTHROPIC_ORIGIN", "BRIEFING_RULES", "BRIEFING_VERSION", "CLOUD_PROVIDERS", "COPILOT_ORIGIN",
+    "CREDENTIALS_STORAGE_KEY", "DEFAULT_BRIEFING_INSTRUCTIONS", "DEFAULT_CONTEXT_WINDOW", "DEFAULT_SETTINGS", "GEMINI_ORIGIN",
+    "KEV_ORIGIN", "LM_STUDIO_ORIGIN", "LOCAL_PROVIDERS", "MAX_BRIEFING_INSTRUCTIONS", "MAX_PARALLEL_SUMMARIES", "MLX_ORIGIN",
     "OPENAI_ORIGIN", "ORIGIN", "PERMISSION_ORIGIN", "SPLASH_ORIGIN", "STORAGE_KEY", "SUMMARY_VERSION",
     "contextWindowForModel", "estimateTokens", "isCloudProvider", "listModels", "maxParallelSummaries",
     "originForProvider", "permissionOriginForProvider", "providerForModel", "recommendedModel",
@@ -350,71 +350,110 @@ test("supports GitHub Copilot, OpenAI, Anthropic, and Gemini cloud providers and
   assert.equal(geminiHttp.calls[1].url, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
 });
 
-test("summarizeBriefing synthesizes P1 notification summaries into a single <=250-word paragraph", async () => {
-  const longParagraph = Array.from({ length: 260 }, (_, i) => i === 180 ? "decision." : `word${i}`).join(" ");
+function briefingReply(content) {
+  return jsonResponse({
+    model: MODEL,
+    done: true,
+    done_reason: "stop",
+    message: { role: "assistant", content: JSON.stringify(content) }
+  });
+}
+
+const BRIEFING_ITEMS = [
+  {
+    label: "acme/payments#418",
+    title: "Webhook retry storm",
+    author: "maya",
+    role: "VP Product",
+    reason: "mention",
+    score: 92,
+    response: "needs_response",
+    summary: "@maya asked you to approve the dual-key grace window before 4pm PT.",
+    action: "Approve the dual-key grace window.",
+    evidence: "@you please approve before 4pm PT"
+  },
+  {
+    label: "acme/runtime#892",
+    title: "Runtime upgrade plan",
+    author: "liam-staff",
+    score: 70,
+    response: "fyi",
+    summary: "@liam-staff shared the rollout plan for the runtime upgrade."
+  }
+];
+
+test("summarizeBriefing returns a headline plus one line per supplied P1 item", async () => {
   const http = fakeHttp([
     tags(),
-    jsonResponse({
-      model: MODEL,
-      done: true,
-      done_reason: "stop",
-      message: {
-        role: "assistant",
-        content: JSON.stringify({
-          briefing: "@maya needs your approval on acme/payments#418 before 4pm PT to unblock the billing hotfix, while @liam-staff is waiting on your sanity check in acme/runtime#892."
-        })
-      }
-    }),
-    tags(),
-    jsonResponse({
-      model: MODEL,
-      done: true,
-      done_reason: "stop",
-      message: {
-        role: "assistant",
-        content: JSON.stringify({ briefing: longParagraph })
-      }
+    briefingReply({
+      headline: "Approve @maya's dual-key grace window on the webhook retry storm before 4pm PT.",
+      items: [
+        { label: "acme/payments#418", line: "@maya (VP Product) needs your approval before 4pm PT to unblock the hotfix." },
+        { label: "acme/invented#1", line: "This label was never supplied." },
+        { label: "acme/payments#418", line: "Duplicate line." }
+      ]
     })
   ]);
-  const res = await summary.summarizeBriefing({
-    model: MODEL,
-    viewer: "you",
-    items: [
-      {
-        label: "acme/payments#418",
-        title: "Webhook retry storm",
-        author: "maya",
-        role: "VP Product",
-        reason: "mention",
-        score: 92,
-        response: "needs_response",
-        summary: "@maya asked you to approve the dual-key grace window before 4pm PT.",
-        action: "Approve the dual-key grace window.",
-        evidence: "@you please approve before 4pm PT"
-      }
-    ]
-  }, http);
-  assert.match(res.briefing, /@maya needs your approval on acme\/payments#418/);
-  const systemPrompt = JSON.parse(http.calls[1].options.body).messages[0].content;
+  const res = await summary.summarizeBriefing({ model: MODEL, viewer: "you", items: BRIEFING_ITEMS }, http);
+  assert.equal(res.headline, "Approve @maya's dual-key grace window on the webhook retry storm before 4pm PT.");
+  assert.deepEqual(res.items, [
+    { label: "acme/payments#418", response: "needs_response", line: "@maya (VP Product) needs your approval before 4pm PT to unblock the hotfix." },
+    { label: "acme/runtime#892", response: "fyi", line: "@liam-staff shared the rollout plan for the runtime upgrade." }
+  ]);
+  assert.equal(res.usedModel, MODEL);
+
+  const body = JSON.parse(http.calls[1].options.body);
+  const systemPrompt = body.messages[0].content;
+  assert.ok(systemPrompt.startsWith(summary.BRIEFING_RULES));
+  assert.match(systemPrompt, /Style instructions:\n/);
+  assert.ok(systemPrompt.endsWith(summary.DEFAULT_BRIEFING_INSTRUCTIONS));
   assert.match(systemPrompt, /Get to the Point/);
   assert.match(systemPrompt, /paulgraham\.com\/talk\.html/);
   assert.match(systemPrompt, /paulgraham\.com\/useful\.html/);
+  assert.deepEqual(body.format.properties.items.items.properties.label.enum, ["acme/payments#418", "acme/runtime#892"]);
+  assert.deepEqual(body.format.required, ["headline", "items"]);
+});
 
-  const capped = await summary.summarizeBriefing({
-    model: MODEL,
-    viewer: "you",
-    items: [
-      {
-        label: "acme/payments#418",
-        title: "Webhook retry storm",
-        author: "maya",
-        score: 92,
-        response: "needs_response",
-        summary: "@maya asked you to approve the dual-key grace window."
-      }
-    ]
-  }, http);
-  assert.ok(capped.briefing.split(/\s+/).length <= 250);
+test("summarizeBriefing applies custom style instructions after the fixed rules and clips long output", async () => {
+  const longLine = Array.from({ length: 80 }, (_, i) => `word${i}`).join(" ");
+  const http = fakeHttp([
+    tags(),
+    briefingReply({ headline: longLine, items: [{ label: "acme/runtime#892", line: longLine }] })
+  ]);
+  const res = await summary.summarizeBriefing(
+    { model: MODEL, viewer: "you", items: BRIEFING_ITEMS },
+    { ...http, instructions: "Write like a pirate.\r\nKeep it short." }
+  );
+  const systemPrompt = JSON.parse(http.calls[1].options.body).messages[0].content;
+  assert.ok(systemPrompt.startsWith(summary.BRIEFING_RULES));
+  assert.ok(systemPrompt.endsWith("Style instructions:\nWrite like a pirate.\nKeep it short."));
+  assert.doesNotMatch(systemPrompt, /Get to the Point/);
+  assert.ok(res.headline.length <= 240 && res.headline.endsWith("…"));
+  assert.equal(res.items[0].label, "acme/runtime#892");
+  assert.ok(res.items[0].line.length <= 220 && res.items[0].line.endsWith("…"));
+  assert.equal(res.items[1].label, "acme/payments#418");
+  assert.equal(res.items[1].line, "Approve the dual-key grace window.");
+
+  const empty = fakeHttp([tags(), briefingReply({ headline: "", items: [] })]);
+  await assert.rejects(
+    summary.summarizeBriefing({ model: MODEL, viewer: "you", items: BRIEFING_ITEMS }, empty),
+    /empty P1 summary/
+  );
+});
+
+test("validateSettings keeps only real custom briefing instructions within the limit", () => {
+  const base = { model: MODEL, automatic: false };
+  assert.deepEqual(summary.validateSettings({ ...base, briefingInstructions: summary.DEFAULT_BRIEFING_INSTRUCTIONS }), base);
+  assert.deepEqual(summary.validateSettings({ ...base, briefingInstructions: "   " }), base);
+  assert.deepEqual(
+    summary.validateSettings({ ...base, briefingInstructions: "  Be blunt.\r\nUse short lines.  " }),
+    { ...base, briefingInstructions: "Be blunt.\nUse short lines." }
+  );
+  assert.throws(
+    () => summary.validateSettings({ ...base, briefingInstructions: "x".repeat(summary.MAX_BRIEFING_INSTRUCTIONS + 1) }),
+    /under 2,000 characters/
+  );
+  assert.throws(() => summary.validateSettings({ ...base, briefingInstructions: 42 }), /must be text/);
 });
 
 test("triageWithKev queries local /v1/systemone and enforces viewer-mention eligibility", async () => {

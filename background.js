@@ -94,7 +94,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   let opening;
   if (message?.type === "gns:open-manager") opening = chrome.runtime.openOptionsPage();
   else if (message?.type === "gns:open-summary-settings" && senderPage(sender)) {
-    opening = chrome.tabs.create({ url: chrome.runtime.getURL("manager.html#summaries") });
+    const section = message.section === "briefing-style" ? "briefing-style" : "summaries";
+    opening = chrome.tabs.create({ url: chrome.runtime.getURL(`manager.html#${section}`) });
   } else if (message?.type === "gns:get-local-priority-rules" && senderPage(sender)) {
     opening = (async () => {
       if (typeof fetch !== "function") return core.DEFAULT_PRIORITY_RULES;
@@ -241,7 +242,7 @@ chrome.runtime.onConnect.addListener((port) => {
       !Array.isArray(message.items) || !message.items.length || message.items.length > 30 ||
       (message.viewer !== undefined && (typeof message.viewer !== "string" || (message.viewer && !core.normalizeLogin(message.viewer))))
     )) {
-      send({ type: "error", message: "The Today briefing request is invalid or has no P1 notification summaries." });
+      send({ type: "error", message: "The Today's P1s request is invalid or has no P1 notification summaries." });
       return;
     }
     if (message.type === "triage" && (
@@ -328,12 +329,13 @@ chrome.runtime.onConnect.addListener((port) => {
           controller.signal.throwIfAborted();
           const expectedBriefingModel = settings.briefingModel || settings.model;
           if (!expectedBriefingModel || (message.model !== expectedBriefingModel && message.model !== settings.model)) {
-            throw new Error("The AI model setting changed. Open AI settings or retry the briefing.");
+            throw new Error("The AI model setting changed. Open AI settings or retry Today's P1s.");
           }
           try {
             value = await summary.summarizeBriefing(message, {
               signal: controller.signal,
               apiKey,
+              instructions: settings.briefingInstructions || "",
               onProgress: (text) => send({ type: "progress", message: text })
             });
           } catch (cloudError) {
@@ -343,6 +345,7 @@ chrome.runtime.onConnect.addListener((port) => {
             send({ type: "progress", message: `Cloud model unavailable; falling back to local ${localFallback}...` });
             const fallbackResult = await summary.summarizeBriefing({ ...message, model: localFallback }, {
               signal: controller.signal,
+              instructions: settings.briefingInstructions || "",
               onProgress: (text) => send({ type: "progress", message: text })
             });
             value = {

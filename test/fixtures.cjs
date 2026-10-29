@@ -139,16 +139,24 @@ function itemPage() {
   </body></html>`;
 }
 
-function commentPage({ id = "issuecomment-123", modern = false, missing = false, body } = {}) {
+function commentPage({ id = "issuecomment-123", modern = false, missing = false, body, composer = false } = {}) {
+  // Mirrors github/github app/views/comments/_preview_comment.html.erb, rendered in every edit and new-comment form.
+  const previewPane = `<div class="preview-content"><div class="comment js-suggested-changes-container" data-thread-side="">
+    <div class="comment-body markdown-body js-preview-body"><p>Nothing to preview</p></div></div></div>`;
+  const editForm = composer ? `<form class="js-comment-update" action="/acme/console/issue_comments/1" method="post">
+    <tab-container class="js-previewable-comment-form previewable-comment-form"><textarea name="issue_comment[body]">Saved text</textarea>${previewPane}</tab-container></form>` : "";
   const comment = (commentId, author, text) => `<div class="${modern ? "react-issue-comment" : "timeline-comment"}" id="${commentId}">
     <a class="author" href="/${author}">${author}</a><relative-time datetime="2026-09-25T17:30:00Z">Today</relative-time>
     <div ${modern ? 'data-testid="markdown-body"' : 'class="comment-body js-comment-body"'}>${text}</div>
+    ${editForm}
   </div>`;
+  const newCommentForm = composer ? `<form class="js-new-comment-form" action="/acme/console/issue_comments" method="post">
+    <tab-container class="js-previewable-comment-form previewable-comment-form"><textarea name="comment[body]"></textarea>${previewPane}</tab-container></form>` : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Item with comments</title></head><body><main><div class="js-discussion-timeline">
     ${comment("issuecomment-122", "sam", "<p>An older, unrelated comment.</p>")}
     ${missing ? "" : comment(id, "ada", body || "<p>@you, could you review the keyboard fix?</p><p>Focus now returns to the Save button.</p>")}
     ${comment("issuecomment-124", "maya", "<p>A newer comment that did not trigger this notification.</p>")}
-  </div></main></body></html>`;
+  </div>${newCommentForm}</main></body></html>`;
 }
 
 module.exports = { notifications, itemPage, commentPage, pages, subscriptions, row, sha };

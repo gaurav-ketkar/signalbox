@@ -250,6 +250,125 @@ select {
   margin-top: 0;
 }
 
+.prompt-editor {
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.prompt-editor > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.prompt-editor > summary::-webkit-details-marker {
+  display: none;
+}
+
+.prompt-editor > summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease-out;
+}
+
+.prompt-editor[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.prompt-editor > summary:hover .prompt-editor-title {
+  color: var(--accent);
+}
+
+.prompt-editor-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.slot-badge.is-custom {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.prompt-editor-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+
+.prompt-editor-body > .help {
+  max-width: 68ch;
+  margin: 0 0 4px;
+}
+
+.prompt-editor-body label {
+  margin-bottom: 0;
+}
+
+#briefing-instructions {
+  min-height: 180px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.prompt-editor-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 16px;
+}
+
+.prompt-editor-footer .help {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt-rules {
+  margin-top: 4px;
+}
+
+.prompt-rules > summary {
+  width: fit-content;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.prompt-rules > summary:hover {
+  color: var(--fg);
+}
+
+.prompt-rules pre {
+  max-height: 260px;
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--subtle);
+  color: var(--muted);
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-editor > summary::before {
+    transition: none;
+  }
+}
+
 .summary-behavior-group {
   display: grid;
   gap: 10px;

@@ -275,9 +275,10 @@ beforeEach(async () => {
         }
       }
       const reqBody = options.body ? JSON.parse(options.body) : null;
-      const isBriefing = Boolean(reqBody?.format?.properties?.briefing || reqBody?.response_format?.json_schema?.name === "morning_briefing");
+      const isBriefing = Boolean(reqBody?.format?.properties?.headline || reqBody?.response_format?.json_schema?.name === "p1_briefing");
       const defaultBriefing = {
-        briefing: "Start with @lead-mgr on acme/console#203—she needs your roadmap sign-off today so the team can lock Q4 scope."
+        headline: "Give @lead-mgr your roadmap sign-off today so the team can lock Q4 scope.",
+        items: [{ label: "acme/console#203", line: "@lead-mgr (Engineering Manager) needs your roadmap sign-off to lock Q4 scope." }]
       };
       const message = {
         role: "assistant",
@@ -1094,6 +1095,35 @@ test("falls back to summarizing available issue and timeline content when an exa
   assert.match(await page.locator(".gns-status").textContent(), /Inbox search complete/);
 });
 
+test("summary fallback ignores GitHub's empty comment composer preview", async () => {
+  await seed();
+  await enableSummaries();
+  routeState.previewHtml = fixture.commentPage({ missing: true, composer: true });
+  await openFilter();
+  await complete();
+  const row = page.locator(".gns-result").nth(1);
+  await row.getByRole("button", { name: "Summarize", exact: true }).click();
+  await summarized(1);
+  const chats = (await aiState()).calls.filter((call) => call.url.endsWith("/api/chat"));
+  assert.equal(chats.length, 1);
+  const sent = JSON.stringify(chats[0].body.messages);
+  assert.doesNotMatch(sent, /Nothing to preview/);
+  assert.match(sent, /A newer comment that did not trigger this notification/);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("exact comment previews ignore edit-form and new-comment preview panes", async () => {
+  routeState.previewHtml = fixture.commentPage({ composer: true });
+  await seed();
+  await openFilter();
+  await complete();
+  const row = page.locator(".gns-result").nth(1);
+  await (await previewToggle(row)).click();
+  await eventually(async () => (await row.locator(".gns-preview-text").textContent()).includes("keyboard fix"), "Exact comment with an edit form did not load");
+  assert.doesNotMatch(await row.locator(".gns-preview-text").textContent(), /Nothing to preview|Saved text/);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("LM Studio setup selects its own local endpoint and never silently switches providers", async () => {
   await seed();
   const manager = await openManager();
@@ -1328,9 +1358,18 @@ test("Priority filter ranks notifications by direct ask, organizational hierarch
   await complete();
   assert.equal(await page.locator(".gns-heading").textContent(), "Today");
   await eventually(async () => {
-    const p = page.locator(".gns-today-paragraph");
-    return (await p.isVisible()) && (await p.textContent()).includes("acme/console#203");
-  }, "Today view did not automatically generate the morning executive briefing");
+    const headline = page.locator(".gns-today-headline");
+    return (await headline.isVisible()) && (await headline.textContent()).includes("roadmap sign-off");
+  }, "Today view did not automatically summarize today's P1s");
+  const card = page.getByRole("region", { name: "Today's P1s, summarized" });
+  assert.equal(await card.getByRole("heading", { level: 2 }).textContent(), "Today's P1s, summarized");
+  assert.deepEqual(await card.locator(".gns-today-group-label").allTextContents(), ["FYI1"]);
+  const p1Link = card.getByRole("link", { name: "Manager urgent ask on roadmap", exact: true });
+  assert.equal(await p1Link.getAttribute("href"), "https://github.com/acme/console/pull/203#issuecomment-123");
+  assert.equal(await card.locator(".gns-today-item-ref").textContent(), "acme/console#203");
+  assert.match(await card.locator(".gns-today-item-line").textContent(), /@lead-mgr \(Engineering Manager\)/);
+  assert.match(await card.locator(".gns-today-meta").textContent(), /^From 1 P1 notification · saved today at/);
+  assert.doesNotMatch(await card.textContent(), /Executive|Morning/);
   assert.deepEqual(await page.locator(".gns-result-title").allTextContents(), [
     "Manager urgent ask on roadmap"
   ]);
@@ -1340,14 +1379,28 @@ test("Priority filter ranks notifications by direct ask, organizational hierarch
   await page.goto("https://github.com/notifications");
   await page.goto("https://github.com/notifications#today");
   await page.locator("[data-gns-panel='today']").waitFor();
-  await eventually(async () => (await page.locator(".gns-today-paragraph").isVisible()) &&
-    (await page.locator(".gns-today-paragraph").textContent()).includes("acme/console#203"),
-    "Saved daily Today briefing was not restored");
+  await eventually(async () => (await page.locator(".gns-today-item-ref").isVisible()) &&
+    (await page.locator(".gns-today-item-title").textContent()) === "Manager urgent ask on roadmap",
+    "Saved daily Today's P1s summary was not restored");
   const chatCallsAfterRevisit = (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length;
   assert.equal(chatCallsAfterRevisit, chatCallsAfterFirstToday, "Revisiting Today on the same day must not regenerate the briefing");
 
-  // Clicking Regenerate briefing explicitly forces a fresh synthesis
-  await page.getByRole("button", { name: "Regenerate briefing", exact: true }).click();
+  // The model only sees the role of the person who wrote the latest comment, never another participant's
+  const briefingCall = (await aiState()).calls.find((c) => c.body?.format?.properties?.headline);
+  const sentItem = JSON.parse(briefingCall.body.messages[1].content).items[0];
+  assert.equal(sentItem.role, sentItem.author === "lead-mgr" ? "Engineering Director" : "");
+
+  // Edit prompt opens AI settings with the prompt editor expanded
+  const [settingsPage] = await Promise.all([
+    context.waitForEvent("page"),
+    card.getByRole("button", { name: "Edit prompt", exact: true }).click()
+  ]);
+  await settingsPage.waitForURL(/manager\.html#briefing-style$/);
+  await eventually(async () => settingsPage.locator("#briefing-style").evaluate((node) => node.open), "Edit prompt did not open the prompt editor");
+  await settingsPage.close();
+
+  // Clicking Regenerate explicitly forces a fresh synthesis
+  await page.getByRole("button", { name: "Regenerate Today's P1 summary", exact: true }).click();
   await eventually(async () => (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length > chatCallsAfterRevisit,
     "Regenerate briefing button did not trigger a new synthesis");
   assert.deepEqual(pageErrors, []);
@@ -1383,6 +1436,38 @@ test("restores unread state via /notifications/beta/unmark after summarizing an 
   await eventually(async () => (await page.locator(".notifications-list-item .gns-ai-summary[data-state='done']").count()) === 1, "Remaining row did not synchronously restore its summary");
   const afterSwapChatCalls = (await aiState()).calls.filter((c) => c.url.endsWith("/api/chat")).length;
   assert.equal(afterSwapChatCalls, initialChatCalls, "DOM replacement after clicking Done must not re-run local LLM inference");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("lets people edit, save, and reset the Today's P1s style instructions", async () => {
+  await enableSummaries(false);
+  const manager = await openManager();
+  const field = manager.locator("#briefing-instructions");
+  const state = manager.locator("#briefing-style-state");
+  await eventually(async () => (await field.inputValue()) === summaries.DEFAULT_BRIEFING_INSTRUCTIONS, "Default prompt did not load");
+  assert.equal(await manager.locator("#briefing-style").evaluate((node) => node.open), false);
+  assert.equal(await state.textContent(), "Default");
+  await manager.getByText("Edit the Today's P1s prompt", { exact: true }).click();
+  assert.equal(await manager.locator("#reset-briefing-instructions").isDisabled(), true);
+  assert.match(await manager.locator("#briefing-rules").textContent(), /Return only JSON shaped like/);
+
+  await field.fill("Be blunt.\nOne short sentence per item.");
+  assert.equal(await state.textContent(), "Custom");
+  assert.equal(await manager.locator("#briefing-instructions-count").textContent(), "38 / 2,000 characters");
+  await manager.locator("#save-summary-settings").click();
+  await eventually(async () => (await manager.locator("#summary-status").textContent()).startsWith("Saved."), "Custom prompt did not save");
+  const saved = await worker.evaluate((key) => chrome.storage.local.get(key).then((v) => v[key]), summaries.STORAGE_KEY);
+  assert.equal(saved.briefingInstructions, "Be blunt.\nOne short sentence per item.");
+
+  await manager.locator("#reset-briefing-instructions").click();
+  assert.equal(await field.inputValue(), summaries.DEFAULT_BRIEFING_INSTRUCTIONS);
+  assert.equal(await state.textContent(), "Default");
+  await manager.locator("#save-summary-settings").click();
+  await eventually(async () => !Object.hasOwn(
+    await worker.evaluate((key) => chrome.storage.local.get(key).then((v) => v[key]), summaries.STORAGE_KEY),
+    "briefingInstructions"
+  ), "Reset prompt was not saved as the default");
+  await manager.close();
   assert.deepEqual(pageErrors, []);
 });
 
@@ -1427,9 +1512,9 @@ test("supports two-slot hybrid routing (local Splash for row summaries + GitHub 
   // On Today (#today), P1 row is summarized locally via Splash (127.0.0.1:8000) and the Executive Briefing is synthesized via GitHub Copilot (api.githubcopilot.com)
   await page.goto("https://github.com/notifications#today");
   await page.locator("[data-gns-panel='today']").waitFor();
-  await eventually(async () => (await page.locator(".gns-today-paragraph").isVisible()) &&
-    (await page.locator(".gns-today-paragraph").textContent()).includes("acme/console#203"),
-    "Hybrid Today briefing did not finish");
+  await eventually(async () => (await page.locator(".gns-today-item-title").isVisible()) &&
+    (await page.locator(".gns-today-item-ref").textContent()) === "acme/console#203",
+    "Hybrid Today's P1s summary did not finish");
   assert.match(await page.locator(".gns-today-meta").textContent(), /Cloud AI \(copilot:claude-opus-5\.5\)/);
   const calls = (await aiState()).calls;
   assert.ok(calls.some((c) => c.url === "http://127.0.0.1:8000/v1/chat/completions" && c.body?.model === "mlx-community/Qwen3.8-27B-4bit"), "Expected P1 row summary to use local Splash");
