@@ -7,8 +7,12 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+---
+
+## [1.7.0] - 2026-10-29
+
 ### Added
-- **Editable Today's P1s prompt:** Change the tone, length, or focus of the Today summary from **Edit prompt** on the card, or **Settings → Edit the Today's P1s prompt**. Your text is saved with your settings and can be reset to the default at any time. The fixed rules that keep the format and links intact are shown read-only.
+- **Editable Today's P1s prompt:** Customize the tone, length, or focus of the Today summary with up to 2,000 characters of your own instructions. Open **Edit prompt** on the card, or **Settings → Edit the Today's P1s prompt**. Your instructions are saved locally with your settings and can be reset to the default at any time. The fixed rules that keep the format and links intact are shown read-only.
 
 ### Changed
 - **"Today's Executive Briefing" is now "Today's P1s, summarized":** Instead of one long paragraph, you get a one-line headline (the first thing to do) and a short list grouped into **Needs your response**, **Unclear asks**, and **FYI**. Each item shows the full issue or pull request title as a link, the `owner/repo#N` reference, and one line on what you need to do. Summaries saved in the old format are regenerated.
