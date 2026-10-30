@@ -10,6 +10,7 @@
   --success: #1a7f37;
   --button-bg: #1f883d;
   --button-hover: #1a7f37;
+  --float-shadow: 0 4px 12px rgb(31 35 40 / 12%);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
   line-height: 1.5;
@@ -27,6 +28,7 @@
     --success: #7ee787;
     --button-bg: #238636;
     --button-hover: #2a963f;
+    --float-shadow: 0 6px 16px rgb(1 4 9 / 60%);
   }
 }
 
@@ -643,6 +645,106 @@ code {
 
 .saved-item a {
   font-weight: 500;
+}
+
+.item-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.closed-group {
+  margin-top: 24px;
+}
+
+.closed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.closed-header h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.closed-list {
+  margin-top: 0;
+}
+
+.closed-list .saved-item a {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.closed-list .saved-item a:hover {
+  color: var(--accent);
+}
+
+.remove-closed-button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.remove-closed-button:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.details-hint {
+  margin-top: 12px;
+}
+
+.undo-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  box-shadow: var(--float-shadow);
+}
+
+.undo-bar[hidden] {
+  display: none;
+}
+
+.undo-bar > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.undo-dismiss {
+  width: 28px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.undo-dismiss:hover {
+  color: var(--fg);
 }
 
 .item-type {

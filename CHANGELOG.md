@@ -9,6 +9,15 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ---
 
+## [1.8.0] - 2026-10-30
+
+### Added
+- **Titles in "Your list":** Saved items now show their real title, with the `owner/repo#N` reference and type underneath. Search matches titles too. Titles come from notification rows, item pages you visit, and GitHub's own hover card for each item. They're saved once and not updated if the title changes later.
+- **Closed items group:** Closed issues and merged pull requests move to a faded **Closed** group at the bottom of the list. Open items are rechecked about twice a day while you have GitHub notifications open.
+- **Remove all closed, with Undo:** One click clears the closed group. An **Undo** bar brings everything back, including saved summaries and caught-up markers. Single removals can be undone too.
+
+---
+
 ## [1.7.0] - 2026-10-29
 
 ### Added

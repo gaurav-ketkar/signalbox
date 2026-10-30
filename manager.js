@@ -40,56 +40,115 @@
     byId("links").removeAttribute("aria-invalid");
   }
 
-  function render() {
+  const STATE_TEXT = { closed: "Closed", merged: "Merged", draft: "Draft" };
+  const TITLE_TYPES = new Set(["issue", "pull", "discussion", "commit"]);
+  let undoState = null;
+
+  function isClosed(item) {
+    return item.state === "closed" || item.state === "merged";
+  }
+
+  function itemRow(item) {
+    const li = document.createElement("li");
+    li.className = "saved-item";
+    const content = document.createElement("div");
+    const link = document.createElement("a");
+    link.className = "item-title";
+    link.href = item.url;
+    link.textContent = item.title || item.label;
+    link.title = item.title ? `${item.title} (${item.label})` : item.label;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.dataset.key = item.key;
+    const meta = document.createElement("span");
+    meta.className = "item-type";
+    const parts = [];
+    if (item.title) parts.push(item.label);
+    parts.push(core.TYPE_LABELS[item.type]);
+    if (STATE_TEXT[item.state]) parts.push(STATE_TEXT[item.state]);
+    meta.textContent = parts.join(" \u00b7 ");
+    content.append(link, meta);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-button";
+    remove.textContent = "Remove";
+    remove.dataset.key = item.key;
+    remove.disabled = !loaded;
+    remove.setAttribute("aria-label", `Remove ${item.label} from subscriptions`);
+    li.append(content, remove);
+    return li;
+  }
+
+  function listControls(selector) {
+    return [...document.querySelectorAll(`.saved-list ${selector}`)];
+  }
+
+  function visibleMatches() {
     const query = byId("search").value.trim().toLowerCase();
-    const matches = items.filter((item) => `${item.label} ${core.TYPE_LABELS[item.type]}`.toLowerCase().includes(query));
-    const fragment = document.createDocumentFragment();
+    return items.filter((item) => [item.title, item.label, core.TYPE_LABELS[item.type], STATE_TEXT[item.state]]
+      .filter(Boolean).join(" ").toLowerCase().includes(query));
+  }
+
+  function render() {
+    const matches = visibleMatches();
+    const openItems = matches.filter((item) => !isClosed(item));
+    const closedItems = matches.filter(isClosed);
     const focused = document.activeElement;
     const focusedKey = focused?.dataset.key;
     const focusSelector = focused?.tagName === "A" ? "a[data-key]" : "button[data-key]";
-    const oldIndex = [...byId("saved-list").querySelectorAll(focusSelector)].indexOf(focused);
-    for (const item of matches) {
-      const li = document.createElement("li");
-      li.className = "saved-item";
-      const content = document.createElement("div");
-      const link = document.createElement("a");
-      link.href = item.url;
-      link.textContent = item.label;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.dataset.key = item.key;
-      const type = document.createElement("span");
-      type.className = "item-type";
-      type.textContent = core.TYPE_LABELS[item.type];
-      content.append(link, type);
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "remove-button";
-      remove.textContent = "Remove";
-      remove.dataset.key = item.key;
-      remove.disabled = !loaded;
-      remove.setAttribute("aria-label", `Remove ${item.label} from subscriptions`);
-      li.append(content, remove);
-      fragment.append(li);
-    }
-    byId("saved-list").replaceChildren(fragment);
+    const oldIndex = listControls(focusSelector).indexOf(focused);
+    byId("saved-list").replaceChildren(...openItems.map(itemRow));
+    byId("closed-list").replaceChildren(...closedItems.map(itemRow));
+    byId("closed-group").hidden = closedItems.length === 0;
+    byId("closed-count").textContent = String(closedItems.length);
+    byId("remove-closed").disabled = !loaded;
+    byId("remove-closed").setAttribute("aria-label", `Remove all ${closedItems.length} closed ${closedItems.length === 1 ? "item" : "items"}`);
     byId("saved-count").textContent = String(items.length);
     byId("empty").hidden = !loaded || items.length > 0;
     byId("no-results").hidden = !loaded || items.length === 0 || matches.length > 0;
     byId("search").hidden = items.length === 0;
     byId("export").disabled = !loaded || items.length === 0;
     byId("add-button").disabled = !loaded;
+    const untitled = items.filter((item) => TITLE_TYPES.has(item.type) && !item.title && !item.checkedAt).length;
+    byId("details-hint").hidden = !loaded || untitled === 0;
+    byId("details-hint").textContent = untitled ?
+      `Titles for ${untitled} ${untitled === 1 ? "item" : "items"} will appear after you next open GitHub notifications.` : "";
     if (currentItem) {
       const saved = items.some((item) => item.key === currentItem.key);
       byId("save-current").textContent = saved ? "Already saved" : "Add this page";
       byId("save-current").disabled = !loaded || saved;
     }
-    if (focusedKey) {
-      const controls = [...byId("saved-list").querySelectorAll(focusSelector)];
+    if (focusedKey && !focused.isConnected) {
+      const controls = listControls(focusSelector);
       const next = controls.find((node) => node.dataset.key === focusedKey) ||
         controls[Math.min(Math.max(oldIndex, 0), controls.length - 1)] || byId("links");
       next.focus({ preventScroll: true });
     }
+  }
+
+  function announce(text) {
+    byId("list-status").textContent = text;
+  }
+
+  function showUndo(snapshot, text, focusKey) {
+    undoState = { snapshot, focusKey };
+    byId("undo-text").textContent = text;
+    byId("undo-bar").hidden = false;
+    byId("status").textContent = "";
+    announce(`${text} Undo is available.`);
+  }
+
+  function hideUndo() {
+    undoState = null;
+    byId("undo-bar").hidden = true;
+    byId("undo-text").textContent = "";
+  }
+
+  async function removeItems(targets, text, focusKey) {
+    clearError();
+    const snapshot = await store.removeMany(targets);
+    await load();
+    showUndo(snapshot, text, focusKey);
   }
 
   async function load() {
@@ -142,7 +201,7 @@
     }
   });
 
-  byId("saved-list").addEventListener("click", async (event) => {
+  async function onListClick(event) {
     const button = event.target.closest("button[data-key]");
     if (!button) return;
     const item = items.find((candidate) => candidate.key === button.dataset.key);
@@ -150,16 +209,53 @@
       showError(new Error("That item changed in another tab. Refresh the list and try again."));
       return;
     }
-    clearError();
     button.disabled = true;
     try {
-      await store.remove(item);
-      await load();
-      byId("status").textContent = `Removed ${item.label}.`;
+      await removeItems([item], `Removed ${item.label}.`, item.key);
     } catch (error) {
       button.disabled = false;
       showError(error);
     }
+  }
+  byId("saved-list").addEventListener("click", onListClick);
+  byId("closed-list").addEventListener("click", onListClick);
+
+  byId("remove-closed").addEventListener("click", async () => {
+    const closed = visibleMatches().filter(isClosed);
+    if (!closed.length) return;
+    byId("remove-closed").disabled = true;
+    try {
+      await removeItems(closed, `Removed ${closed.length} closed ${closed.length === 1 ? "item" : "items"}.`, "");
+      byId("undo").focus();
+    } catch (error) {
+      byId("remove-closed").disabled = !loaded;
+      showError(error);
+    }
+  });
+
+  byId("undo").addEventListener("click", async () => {
+    if (!undoState) return;
+    const { snapshot, focusKey } = undoState;
+    byId("undo").disabled = true;
+    try {
+      const restored = await store.restore(snapshot);
+      hideUndo();
+      await load();
+      announce(`Restored ${restored} ${restored === 1 ? "item" : "items"}.`);
+      const target = focusKey ?
+        listControls("button[data-key]").find((node) => node.dataset.key === focusKey) :
+        (!byId("closed-group").hidden && byId("remove-closed"));
+      (target || byId("search")).focus();
+    } catch (error) {
+      showError(error);
+    } finally {
+      byId("undo").disabled = false;
+    }
+  });
+
+  byId("undo-dismiss").addEventListener("click", () => {
+    hideUndo();
+    announce("");
   });
 
   byId("search").addEventListener("input", render);
@@ -172,7 +268,7 @@
     try {
       await store.add([currentItem]);
       await load();
-      byId("status").textContent = `Added ${currentItem.label}.`;
+      byId("status").textContent = `Added ${currentItem.title || currentItem.label}.`;
     } catch (error) {
       byId("save-current").disabled = false;
       showError(error);
@@ -204,9 +300,13 @@
     if (!popup) return;
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      currentItem = core.parseItem(tab?.url);
-      if (!currentItem) return;
-      byId("current-label").textContent = currentItem.label;
+      const parsed = core.parseItem(tab?.url);
+      if (!parsed) return;
+      const title = core.titleFromDocumentTitle(tab.title, parsed);
+      currentItem = title ? { ...parsed, title } : parsed;
+      byId("current-label").textContent = title || parsed.label;
+      byId("current-meta").textContent = [title ? parsed.label : "", core.TYPE_LABELS[parsed.type]].filter(Boolean).join(" \u00b7 ");
+      byId("current-meta").hidden = false;
       byId("current-page").hidden = false;
       render();
     } catch (error) {
@@ -690,7 +790,7 @@
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (storeApi.isSubscriptionChange(changes, area)) void load().catch(showError);
+    if (storeApi.isSubscriptionChange(changes, area) || storeApi.isDetailsChange(changes, area)) void load().catch(showError);
     if (storeApi.isPriorityRulesChange?.(changes, area)) void loadPriorityRules();
     if (storeApi.isSummaryChange(changes, area)) void loadSummarySettings();
     if (storeApi.isCacheChange(changes, area) || storeApi.isReviewChange(changes, area)) {

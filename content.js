@@ -4,6 +4,7 @@
   const core = globalThis.GitHubSubscriptions;
   const dom = globalThis.GitHubSubscriptionDom;
   const preview = globalThis.GitHubSubscriptionPreview;
+  const detailsApi = globalThis.GitHubSubscriptionDetails;
   const summaryApi = globalThis.GitHubSubscriptionSummary;
   const summaryClient = globalThis.GitHubSubscriptionSummaryClient;
   const scanner = globalThis.GitHubSubscriptionScanner;
@@ -34,9 +35,16 @@
   ];
   const SCAN_CACHE_MS = 10 * 60 * 1000;
   const PRIORITY_CACHE_MS = 4 * 60 * 60 * 1000;
+  const DETAILS_ROUND_GAP_MS = 30 * 1000;
   const memorySummaries = new Map();
   const memoryBriefings = new Map();
   const checkedInThisTab = new Set();
+  const pendingDetails = new Map();
+  const detailsTried = new Set();
+  let detailsFlushTimer = 0;
+  let detailsTimer = 0;
+  let detailsController = null;
+  let detailsAgain = false;
   let scheduled = false;
 
   function memorySummaryKey(viewer, model, itemKey) {
@@ -535,6 +543,7 @@
       storageError = "";
       ready = true;
       reconcile();
+      scheduleDetails();
     } catch (error) {
       if (version !== loadVersion) return;
       ready = false;
@@ -542,6 +551,88 @@
       if (view) view.controller?.abort();
       reconcile();
       report(error);
+    }
+  }
+
+  // The list manager shows each saved item's title and whether it is closed.
+  // Notification rows and item pages already show both, so note them as they
+  // appear; GitHub's hovercards fill in the rest (see details.js).
+  function detailsFor(item) {
+    return {
+      url: item.url,
+      title: item.titleFound ? item.title : core.titleFromDocumentTitle(document.title, item),
+      state: core.normalizeState(item.state)
+    };
+  }
+
+  function noteDetails(item) {
+    const saved = item && subscriptions.get(item.key);
+    if (!saved) return;
+    const details = detailsFor(item);
+    const now = Date.now();
+    const newTitle = Boolean(details.title) && !saved.title;
+    const newState = Boolean(details.state) &&
+      (details.state !== saved.state || now - (saved.checkedAt || 0) >= storeApi.DETAILS_RECHECK_MS);
+    if (!newTitle && !newState) return;
+    subscriptions.set(item.key, {
+      ...saved,
+      ...(newTitle ? { title: details.title } : {}),
+      ...(newState ? { state: details.state, checkedAt: now } : {})
+    });
+    pendingDetails.set(item.key, { ...details, checked: Boolean(details.state) });
+    clearTimeout(detailsFlushTimer);
+    detailsFlushTimer = setTimeout(flushDetails, 1000);
+  }
+
+  function flushDetails() {
+    clearTimeout(detailsFlushTimer);
+    const updates = [...pendingDetails.values()];
+    pendingDetails.clear();
+    // Titles are display hints; a failed write is retried on a later visit.
+    if (updates.length) store.saveDetails(updates).catch(() => {});
+  }
+
+  function noteStoredDetails(changes) {
+    for (const [key, change] of Object.entries(changes)) {
+      if (!key.startsWith(storeApi.DETAILS_PREFIX)) continue;
+      const saved = subscriptions.get(key.slice(storeApi.DETAILS_PREFIX.length));
+      if (saved && change.newValue) subscriptions.set(saved.key, { ...saved, ...storeApi.readDetails(change.newValue, saved) });
+    }
+  }
+
+  function scheduleDetails() {
+    clearTimeout(detailsTimer);
+    if (core.isNotifications(location.href)) detailsTimer = setTimeout(() => void runDetails(), 1500);
+  }
+
+  async function runDetails() {
+    if (!ready || !core.isNotifications(location.href)) return;
+    if (detailsController) {
+      // Items added mid-run are picked up once this run ends.
+      detailsAgain = true;
+      return;
+    }
+    const controller = new AbortController();
+    detailsController = controller;
+    detailsAgain = false;
+    try {
+      // Rounds of up to 50 cards with a pause between them keep a large first
+      // backlog moving without a burst of requests to GitHub.
+      for (let more = true; more && core.isNotifications(location.href);) {
+        ({ more } = await detailsApi.backfill([...subscriptions.values()], {
+          signal: controller.signal,
+          tried: detailsTried,
+          // Another tab or a notification row may have filled an item in since this round started.
+          latest: (record) => subscriptions.get(record.key),
+          save: (updates) => store.saveDetails(updates)
+        }));
+        if (more) await detailsApi.wait(DETAILS_ROUND_GAP_MS, controller.signal);
+      }
+    } catch {
+      // Anything missed is tried again on a later visit.
+    } finally {
+      if (detailsController === controller) detailsController = null;
+      if (detailsAgain && !controller.signal.aborted) scheduleDetails();
     }
   }
 
@@ -561,16 +652,26 @@
     const node = owned(button("", compact ? "gns-pin" : "gns-button gns-item-pin", async (clicked) => {
       if (!ready || clicked.dataset.pending === "true") return;
       clicked.dataset.pending = "true";
-      const wasSaved = subscriptions.has(item.key);
-      if (wasSaved) subscriptions.delete(item.key);
-      else subscriptions.set(item.key, { ...item, savedAt: Date.now() });
+      const previous = subscriptions.get(item.key);
+      const details = detailsFor(item);
+      if (previous) {
+        subscriptions.delete(item.key);
+      } else {
+        const now = Date.now();
+        subscriptions.set(item.key, {
+          ...core.parseItem(item.url),
+          savedAt: now,
+          ...(details.title ? { title: details.title } : {}),
+          ...(details.state ? { state: details.state, checkedAt: now } : {})
+        });
+      }
       updatePin(clicked, item, compact);
       try {
-        if (wasSaved) await store.remove(item);
-        else await store.add([item]);
+        if (previous) await store.remove(item);
+        else await store.add([details]);
         await loadSubscriptions();
       } catch (error) {
-        if (wasSaved) subscriptions.set(item.key, { ...item, savedAt: Date.now() });
+        if (previous) subscriptions.set(item.key, previous);
         else subscriptions.delete(item.key);
         throw error;
       } finally {
@@ -614,6 +715,7 @@
         delete row.dataset.gnsHasSummary;
         continue;
       }
+      noteDetails(item);
       if (!current) {
         if (existingPin && existingPin.dataset.gnsPin !== item.key) existingPin.remove();
         if (existingPin?.isConnected) updatePin(existingPin, item, true);
@@ -714,6 +816,7 @@
       tools = null;
     }
     if (!item) return;
+    noteDetails(item);
     if (tools) {
       updatePin(tools.querySelector("[data-gns-pin]"), item, false);
       return;
@@ -2834,6 +2937,7 @@
           current.useDocument = false;
           try {
             for (const item of dom.readPage(document, INBOX).items) {
+              noteDetails(item);
               if ((current.mode === "priority" || current.mode === "today") && current.priorityOrder?.length && current.items.has(item.key)) {
                 // Preserve the pinned item's priority snapshot while updating read/unread dot state.
                 current.items.set(item.key, { ...current.items.get(item.key), unread: item.unread });
@@ -2892,6 +2996,7 @@
       onPage: (page) => {
         if (view !== current) return;
         for (const item of page.items) {
+          noteDetails(item);
           mergeItem(current.scanned, item);
           current.items.set(item.key, current.scanned.get(item.key));
         }
@@ -3084,6 +3189,9 @@
   window.addEventListener("pagehide", () => {
     stopView();
     stopNativeView();
+    clearTimeout(detailsTimer);
+    detailsController?.abort();
+    flushDetails();
   });
   window.addEventListener("submit", interceptFilterSubmit, true);
   window.addEventListener("click", interceptFilterSubmit, true);
@@ -3096,6 +3204,7 @@
       }
       void loadSubscriptions();
     }
+    if (storeApi.isDetailsChange(changes, area)) noteStoredDetails(changes);
     if (storeApi.isSummaryChange(changes, area)) void loadSummarySettings();
     for (const current of [view, nativeView]) {
       if (!current) continue;

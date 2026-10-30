@@ -145,6 +145,48 @@
     return { key, owner, repo, repository, type, label, url: `${ORIGIN}/${path}` };
   }
 
+  // GitHub labels states differently across rows, hovercards, and pages
+  // ("Status: Closed as not planned", "Not planned", "Merged"). Saved items
+  // keep one of four plain values; anything unrecognized is left unknown.
+  function normalizeState(value) {
+    const text = cleanText(value, 100).toLowerCase().replace(/^status:\s*/, "");
+    if (text.startsWith("merged")) return "merged";
+    if (text.startsWith("closed") || text.startsWith("not planned")) return "closed";
+    if (text.startsWith("draft")) return "draft";
+    if (text.startsWith("open")) return "open";
+    return "";
+  }
+
+  // Reads an item's title from its own page title, for example
+  // "Fix login · Issue #12 · owner/repo · GitHub". The trailing metadata must
+  // name this exact item, so a page that is still showing the previous item's
+  // title never lends it to the next one. Release page titles don't name the
+  // tag, so releases rely on notification rows instead.
+  function titleFromDocumentTitle(value, item) {
+    const parsed = parseItem(item?.url);
+    if (!parsed || typeof value !== "string") return "";
+    const parts = value.split(" · ").map((part) => part.trim());
+    if (parts.length < 3 || parts.at(-1) !== "GitHub") return "";
+    const repository = parsed.repository;
+    let titleParts = null;
+    if (parsed.type === "issue" || parsed.type === "pull") {
+      const kind = /^(Issue|Pull Request) #([1-9]\d*)$/.exec(parts.at(-3));
+      if (parts.length >= 4 && kind && kind[2] === parsed.key.split("#")[1] && parts.at(-2).toLowerCase() === repository) {
+        titleParts = parts.slice(0, -3);
+        // Pull request pages append " by <author>" to the title.
+        if (kind[1] === "Pull Request") titleParts.push(titleParts.pop().replace(/\s+by\s+[\w-]+(?:\[bot\])?$/, ""));
+      }
+    } else if (parsed.type === "discussion") {
+      if (parts.length >= 4 && parts.at(-2) === `Discussion #${parsed.key.split("#")[1]}` && parts.at(-3).toLowerCase() === repository) {
+        titleParts = parts.slice(0, -3);
+      }
+    } else if (parsed.type === "commit") {
+      if (parts.at(-2).toLowerCase() === `${repository}@${parsed.key.split("/commit/")[1].slice(0, 7)}`) titleParts = parts.slice(0, -2);
+    }
+    const title = cleanText(titleParts?.join(" · "), 300);
+    return title && title !== parsed.label ? title : "";
+  }
+
   function parseInput(value) {
     const entries = String(value ?? "").trim().split(/\s+/).filter(Boolean);
     const unique = new Map();
@@ -420,6 +462,8 @@
     normalizeLogin,
     githubUrl,
     parseItem,
+    normalizeState,
+    titleFromDocumentTitle,
     parseInput,
     notificationPageUrl,
     isNotifications,

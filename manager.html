@@ -40,6 +40,7 @@ FORM: A compact list editor extending GitHub's established interface. No concept
         <div>
           <span class="field-label">This page</span>
           <span id="current-label"></span>
+          <span id="current-meta" class="item-type" hidden></span>
         </div>
         <button id="save-current" type="button">Add this page</button>
       </section>
@@ -65,8 +66,22 @@ FORM: A compact list editor extending GitHub's established interface. No concept
             <button id="export" class="text-button" type="button" disabled>Export links</button>
           </div>
           <label class="sr-only" for="search">Filter saved subscriptions</label>
-          <input id="search" type="search" placeholder="Find a saved item" autocomplete="off" hidden>
+          <input id="search" type="search" placeholder="Find by title or repository" autocomplete="off" hidden>
           <ul id="saved-list" class="saved-list" aria-label="Saved subscriptions"></ul>
+          <section id="closed-group" class="closed-group" aria-labelledby="closed-heading" hidden>
+            <div class="closed-header">
+              <h3 id="closed-heading">Closed <span id="closed-count" class="count">0</span></h3>
+              <button id="remove-closed" class="remove-closed-button" type="button">Remove all</button>
+            </div>
+            <ul id="closed-list" class="saved-list closed-list" aria-label="Closed subscriptions"></ul>
+          </section>
+          <p id="details-hint" class="help details-hint" hidden></p>
+          <p id="list-status" class="sr-only" role="status" aria-live="polite"></p>
+          <div id="undo-bar" class="undo-bar" hidden>
+            <span id="undo-text"></span>
+            <button id="undo" class="text-button" type="button">Undo</button>
+            <button id="undo-dismiss" class="undo-dismiss" type="button" aria-label="Dismiss">&times;</button>
+          </div>
           <div id="empty" class="empty" hidden>
             <h3>No subscriptions yet</h3>
             <p>Add links on the left, or click the bookmark icon on any GitHub issue, PR, or notification.</p>

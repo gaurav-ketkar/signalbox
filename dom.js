@@ -90,6 +90,8 @@
         archiveToken,
         unmarkToken,
         title: core.cleanText(titleNode?.textContent || anchor.textContent, 1024) || item.label,
+        // False when the title had to fall back to the whole link text.
+        titleFound: Boolean(core.cleanText(titleNode?.textContent, 1024)),
         ...readReason(row),
         participants: readParticipants(row),
         state: STATES.find(([selector]) => row.querySelector(selector))?.[1] || "",

@@ -42,6 +42,7 @@ At the top of **Priority** and **Subscriptions**, Signalbox groups noisy threads
   - Click the bookmark icon on any notification row.
   - Paste one or more URLs or `owner/repo#123` shorthands into the toolbar popup (`manager.html`).
 - **Supported targets:** Issues, pull requests, discussions, releases (`/releases/tag/...`), and full 40-character commit SHAs. Comments, query strings, and PR sub-tabs (`/files`, `/commits`) normalize to the parent item.
+- **Titles and closed state in "Your list":** Signalbox reads titles and open/closed state from notification rows and item pages you already have open. For anything left, it asks for GitHub's small hover card for that item (the same card github.com shows when you hover an item link). It only does this while a notifications page is open, two cards at a time, up to 50 per round with 30 seconds between rounds. If GitHub is busy or asks you to sign in, it stops and tries later. Missing titles are retried daily, and open issues and pull requests are rechecked about every 12 hours. Releases have no hover card, so they keep their tag label. These details are stored as separate local records, so they never bring back an item you removed. No new permissions are needed.
 - **All-page inbox scan:** Scans read and unread notifications across all inbox pages (and expands repository-grouped `View all notifications` links) using sequential same-origin requests. Supports **Pause / Continue**, **Refresh**, and **Retry** without presenting an incomplete scan as complete.
 
 ---
@@ -112,5 +113,5 @@ Allow only the exact extension origin, not `*`. If Ollama reports HTTP 403, allo
 
 ## 6. Storage & Privacy
 
-- All data (`chrome.storage.local`) stays in your local Chrome profile: saved item URLs, priority rules, model selection, caught-up markers, and bounded summaries. Full source comments stay in memory only and are never persisted.
+- All data (`chrome.storage.local`) stays in your local Chrome profile: saved item URLs, their titles and open/closed state, priority rules, model selection, caught-up markers, and bounded summaries. Full source comments stay in memory only and are never persisted.
 - Zero analytics, zero cloud API calls, zero GitHub API tokens. Loopback requests reject redirects and never forward GitHub cookies.

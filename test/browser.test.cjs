@@ -155,6 +155,12 @@ before(async () => {
   extensionId = new URL(worker.url()).hostname;
   await context.route("https://github.com/**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/hovercard")) {
+      routeState.hovercards = (routeState.hovercards || []).concat(url.href);
+      const card = routeState.cards?.[url.pathname.replace(/\/hovercard$/, "").toLowerCase()];
+      await route.fulfill(card ? { contentType: "text/html", body: card } : { status: 404, contentType: "text/plain", body: "Not found" });
+      return;
+    }
     routeState.requests.push({ url: url.href, method: route.request().method(), type: route.request().resourceType(), referrer: route.request().headers().referer });
     if (url.pathname === "/notifications/beta/archive" && route.request().method() === "POST") {
       const body = route.request().postData() || "";
@@ -711,6 +717,83 @@ test("notification-row bookmarks do not navigate or invoke native actions", asyn
   await eventually(async () => (await pin.getAttribute("aria-pressed")) === "true", "Pin was not saved");
   assert.equal(page.url(), "https://github.com/notifications");
   assert.equal(await page.evaluate(() => window.fixtureWrites), 0);
+  const href = await page.locator(".notifications-list-item").first().locator("a[href]").first().getAttribute("href");
+  const key = core.parseItem(new URL(href, "https://github.com").href).key;
+  const details = await worker.evaluate(async (name) => (await chrome.storage.local.get(name))[name], storeApi.DETAILS_PREFIX + key);
+  assert.equal(details?.title, "Tighten the release checklist");
+});
+
+test("notification rows and GitHub's hovercards fill in saved titles and states", async () => {
+  routeState.cards = {
+    "/acme/console/issues/5555": '<div><div><a class="Link--primary" href="/acme/console/issues/5555"><h4 class="markdown-title"><bdi>Retire the flaky upload test</bdi></h4></a></div><span class="State" title="Status: Closed">Closed</span></div>'
+  };
+  await seed(["https://github.com/acme/console/issues/11", "https://github.com/acme/console/issues/5555", "https://github.com/acme/console/issues/5556"]);
+  await page.goto("https://github.com/notifications");
+  await eventually(async () => {
+    const saved = await worker.evaluate(async () => chrome.storage.local.get(null));
+    return saved[storeApi.DETAILS_PREFIX + "acme/console#5555"]?.state === "closed" &&
+      saved[storeApi.DETAILS_PREFIX + "acme/console#5556"]?.checkedAt;
+  }, "Hovercards did not fill in details");
+  assert.equal(routeState.hovercards.some((url) => url.includes("/issues/11/")), false, "Rows already named #11");
+  assert.ok(routeState.hovercards.every((url) => url.endsWith("/hovercard")));
+  assert.ok(routeState.requests.every((request) => !request.url.endsWith("/hovercard")));
+  const manager = await openManager();
+  await eventually(async () => (await manager.locator("#closed-list .item-title").allTextContents()).includes("Retire the flaky upload test"), "Closed item did not show its title");
+  assert.deepEqual((await manager.locator("#saved-list .item-title").allTextContents()).sort(), ["Tighten the release checklist", "acme/console#5556"].sort());
+  assert.equal(await manager.locator("#details-hint").isHidden(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("manager shows titles, groups closed items, and can undo Remove all", async () => {
+  const now = Date.now();
+  const urls = [
+    "https://github.com/acme/console/issues/11",
+    "https://github.com/acme/console/pull/42",
+    "https://github.com/acme/console/issues/7",
+    "https://github.com/acme/console/releases/tag/v2.0",
+    "https://github.com/acme/console/issues/8"
+  ];
+  await seed(urls);
+  await worker.evaluate(async (values) => chrome.storage.local.set(values), {
+    [storeApi.DETAILS_PREFIX + "acme/console#11"]: { title: "Tighten the release checklist", state: "open", checkedAt: now },
+    [storeApi.DETAILS_PREFIX + "acme/console#42"]: { title: "Keep keyboard focus after saving", state: "merged", checkedAt: now },
+    [storeApi.DETAILS_PREFIX + "acme/console#7"]: { title: "An old request that was declined after a long discussion about scope and timing", state: "closed", checkedAt: now }
+  });
+  const manager = await openManager();
+  await eventually(async () => (await manager.locator("#closed-list .saved-item").count()) === 2, "Closed group did not render");
+  assert.equal(await manager.locator("#saved-list .saved-item").count(), 3);
+  assert.equal(await manager.locator("#closed-count").textContent(), "2");
+  const metas = await manager.locator("#closed-list .item-type").allTextContents();
+  assert.ok(metas.includes("acme/console#42 \u00b7 Pull request \u00b7 Merged"));
+  assert.match(await manager.locator("#details-hint").textContent(), /Titles for 1 item will appear/);
+  await manager.locator("#search").fill("checklist");
+  assert.equal(await manager.locator(".saved-item").count(), 1);
+  assert.equal(await manager.locator("#closed-group").isHidden(), true);
+  await manager.locator("#search").fill("");
+  await manager.setViewportSize({ width: 1000, height: 900 });
+  await manager.screenshot({ path: path.join(resultsPath, "manager-closed-group.png"), fullPage: true });
+  await manager.getByRole("button", { name: "Remove all 2 closed items", exact: true }).click();
+  await manager.locator("#undo-bar").waitFor({ state: "visible" });
+  assert.equal(await manager.locator("#undo-text").textContent(), "Removed 2 closed items.");
+  assert.equal(await manager.evaluate(() => document.activeElement.id), "undo");
+  assert.equal(await manager.locator("#closed-group").isHidden(), true);
+  await manager.emulateMedia({ colorScheme: "dark" });
+  await manager.screenshot({ path: path.join(resultsPath, "manager-undo-dark.png"), fullPage: true });
+  await manager.emulateMedia({ colorScheme: "light" });
+  await manager.locator("#undo").click();
+  await eventually(async () => (await manager.locator("#closed-list .saved-item").count()) === 2, "Undo did not restore items");
+  assert.equal(await manager.locator("#undo-bar").isHidden(), true);
+  assert.equal(await manager.locator("#list-status").textContent(), "Restored 2 items.");
+  const saved = await worker.evaluate(async () => chrome.storage.local.get(null));
+  assert.equal(saved[storeApi.DETAILS_PREFIX + "acme/console#42"].state, "merged");
+  await manager.getByRole("button", { name: "Remove acme/console#11 from subscriptions", exact: true }).click();
+  await eventually(async () => (await manager.locator("#undo-text").textContent()) === "Removed acme/console#11.", "Single remove did not offer Undo");
+  await manager.locator("#undo-dismiss").click();
+  assert.equal(await manager.locator("#undo-bar").isHidden(), true);
+  const popup = await openManager(true);
+  await popup.setViewportSize({ width: 420, height: 650 });
+  await popup.screenshot({ path: path.join(resultsPath, "manager-popup-closed.png"), fullPage: true });
+  assert.deepEqual(pageErrors, []);
 });
 
 test("manager validates whole batches, handles duplicates, searches, exports, and persists", async () => {

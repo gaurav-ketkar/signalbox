@@ -9,6 +9,11 @@
 
   const REVIEW_PREFIX = "review:v1:";
   const CACHE_PREFIX = "summary-cache:v2:";
+  // Titles and states live beside, not inside, saved items. A late background
+  // write then can never bring back an item that was just removed, and does
+  // not count as a list change that makes every GitHub tab redraw.
+  const DETAILS_PREFIX = "subscription-details:v1:";
+  const DETAILS_RECHECK_MS = 60 * 60 * 1000;
   const CACHE_RESET_KEY = "summary-cache:reset";
   const REVIEW_RESET_KEY = "review:reset";
   const CACHE_LIMIT = 200;
@@ -121,6 +126,41 @@
     return { name, enabled: value.enabled };
   }
 
+  function detailTitle(value, item) {
+    const title = typeof value === "string" ? core.cleanText(value, 300) : "";
+    return title && title !== item.label ? title : "";
+  }
+
+  // Details are hints for display. Anything unreadable is dropped rather than
+  // blocking the list the way a damaged saved item does.
+  function readDetails(value, item) {
+    const details = {};
+    if (!value || typeof value !== "object") return details;
+    const title = detailTitle(value.title, item);
+    if (title) details.title = title;
+    if (typeof value.state === "string" && value.state && core.normalizeState(value.state) === value.state) details.state = value.state;
+    if (validTimestamp(value.checkedAt)) details.checkedAt = value.checkedAt;
+    return details;
+  }
+
+  function isSaved(value, key) {
+    return Boolean(value) && core.parseItem(value.url)?.key === key && Number.isFinite(value.savedAt);
+  }
+
+  // Every stored key that belongs to one saved item, including its local
+  // caught-up marker and saved summaries, which are keyed "<prefix><login>:<key>".
+  function ownerKey(storageKey) {
+    for (const prefix of [core.STORAGE_PREFIX, DETAILS_PREFIX]) {
+      if (storageKey.startsWith(prefix)) return storageKey.slice(prefix.length);
+    }
+    for (const prefix of [REVIEW_PREFIX, CACHE_PREFIX]) {
+      if (!storageKey.startsWith(prefix)) continue;
+      const separator = storageKey.indexOf(":", prefix.length);
+      return separator > prefix.length ? storageKey.slice(separator + 1) : "";
+    }
+    return "";
+  }
+
   function createStore(area) {
     async function list() {
       const values = await area.get(null);
@@ -131,34 +171,102 @@
         if (!item || key !== core.STORAGE_PREFIX + item.key || !Number.isFinite(value.savedAt)) {
           throw new Error("A saved subscription is unreadable. Reload the extension before changing your list.");
         }
-        items.push({ ...item, savedAt: value.savedAt });
+        items.push({ ...item, savedAt: value.savedAt, ...readDetails(values[DETAILS_PREFIX + item.key], item) });
       }
       return items.sort((a, b) => b.savedAt - a.savedAt || a.key.localeCompare(b.key));
     }
 
     async function add(items) {
-      const parsed = items.map((item) => core.parseItem(typeof item === "string" ? item : item.url));
+      const parsed = items.map((item) => core.parseItem(typeof item === "string" ? item : item?.url));
       if (parsed.some((item) => !item)) throw new Error("Use a supported github.com item link.");
       const keys = parsed.map((item) => core.STORAGE_PREFIX + item.key);
       const existing = keys.length ? await area.get(keys) : {};
       const updates = {};
-      for (const item of parsed) {
+      let added = 0;
+      const now = Date.now();
+      parsed.forEach((item, index) => {
         const key = core.STORAGE_PREFIX + item.key;
-        if (!Object.hasOwn(existing, key)) updates[key] = { url: item.url, savedAt: Date.now() };
-      }
+        if (Object.hasOwn(existing, key) || Object.hasOwn(updates, key)) return;
+        updates[key] = { url: item.url, savedAt: now };
+        added += 1;
+        // Saving from a notification row or an item page already knows the
+        // title, so the list can show it without asking GitHub again.
+        const source = items[index];
+        if (!source || typeof source !== "object") return;
+        const details = {};
+        const title = detailTitle(source.title, item);
+        const state = core.normalizeState(source.state);
+        if (title) details.title = title;
+        if (state) Object.assign(details, { state, checkedAt: now });
+        if (Object.keys(details).length) updates[DETAILS_PREFIX + item.key] = details;
+      });
       // One storage key per item prevents unrelated edits in different tabs
       // from overwriting each other with stale copies of an entire list.
-      if (Object.keys(updates).length) await area.set(updates);
-      return Object.keys(updates).length;
+      if (added) await area.set(updates);
+      return added;
+    }
+
+    // Each update is { url, title?, state?, checked? }. Titles are filled once,
+    // states follow what GitHub shows now, and items that are no longer saved
+    // are skipped.
+    async function saveDetails(updates) {
+      const incoming = new Map();
+      for (const update of Array.isArray(updates) ? updates : []) {
+        const item = core.parseItem(update?.url);
+        if (!item) continue;
+        const entry = incoming.get(item.key) || { item, title: "", state: "", checked: false };
+        entry.title ||= detailTitle(update.title, item);
+        entry.state = core.normalizeState(update.state) || entry.state;
+        entry.checked ||= update.checked === true;
+        incoming.set(item.key, entry);
+      }
+      if (!incoming.size) return 0;
+      const existing = await area.get([...incoming.keys()].flatMap((key) => [core.STORAGE_PREFIX + key, DETAILS_PREFIX + key]));
+      const now = Date.now();
+      const writes = {};
+      for (const [key, entry] of incoming) {
+        if (!isSaved(existing[core.STORAGE_PREFIX + key], key)) continue;
+        const previous = readDetails(existing[DETAILS_PREFIX + key], entry.item);
+        const next = { ...previous };
+        if (entry.title && !previous.title) next.title = entry.title;
+        const stateChanged = Boolean(entry.state) && entry.state !== previous.state;
+        if (stateChanged) next.state = entry.state;
+        // Seeing the same state again only refreshes the check time hourly,
+        // so busy inbox pages do not write on every redraw.
+        if (stateChanged || (entry.checked && (!previous.checkedAt || now - previous.checkedAt >= DETAILS_RECHECK_MS))) next.checkedAt = now;
+        if (JSON.stringify(next) !== JSON.stringify(previous)) writes[DETAILS_PREFIX + key] = next;
+      }
+      if (Object.keys(writes).length) await area.set(writes);
+      return Object.keys(writes).length;
+    }
+
+    // Returns everything removed so the caller can offer Undo.
+    async function removeMany(items) {
+      const parsed = items.map((item) => core.parseItem(typeof item === "string" ? item : item?.url));
+      if (parsed.some((item) => !item)) throw new Error("This subscription could not be identified.");
+      const keys = new Set(parsed.map((item) => item.key));
+      const values = await area.get(null);
+      const snapshot = {};
+      for (const [key, value] of Object.entries(values)) {
+        if (keys.has(ownerKey(key))) snapshot[key] = value;
+      }
+      if (Object.keys(snapshot).length) await area.remove(Object.keys(snapshot));
+      return snapshot;
+    }
+
+    async function restore(snapshot) {
+      const writes = {};
+      for (const [key, value] of Object.entries(snapshot && typeof snapshot === "object" ? snapshot : {})) {
+        if (ownerKey(key)) writes[key] = value;
+      }
+      if (Object.keys(writes).length) await area.set(writes);
+      return Object.keys(writes).filter((key) => key.startsWith(core.STORAGE_PREFIX)).length;
     }
 
     async function remove(item) {
-      const parsed = core.parseItem(typeof item === "string" ? item : item.url);
+      const parsed = core.parseItem(typeof item === "string" ? item : item?.url);
       if (!parsed) throw new Error("This subscription could not be identified.");
-      const values = await area.get(null);
-      const related = Object.keys(values).filter((key) =>
-        (key.startsWith(REVIEW_PREFIX) || key.startsWith(CACHE_PREFIX)) && key.endsWith(":" + parsed.key));
-      await area.remove([core.STORAGE_PREFIX + parsed.key, ...related]);
+      await removeMany([parsed]);
     }
 
     async function getFilter() {
@@ -316,7 +424,7 @@
     }
 
     return {
-      list, add, remove, getFilter, saveFilter, getPriorityRules, savePriorityRules,
+      list, add, remove, removeMany, restore, saveDetails, getFilter, saveFilter, getPriorityRules, savePriorityRules,
       getSummarySettings, saveSummarySettings, getProviderCredentials, saveProviderCredential,
       listReviews, setCaughtUp, getCachedSummary, saveCachedSummary, deleteCachedSummary,
       localDataCounts, clearLocalData
@@ -325,6 +433,10 @@
 
   function isSubscriptionChange(changes, areaName) {
     return areaName === "local" && Object.keys(changes).some((key) => key.startsWith(core.STORAGE_PREFIX));
+  }
+
+  function isDetailsChange(changes, areaName) {
+    return areaName === "local" && Object.keys(changes).some((key) => key.startsWith(DETAILS_PREFIX));
   }
 
   function isFilterChange(changes, areaName) {
@@ -348,8 +460,8 @@
   }
 
   return {
-    createStore, isSubscriptionChange, isFilterChange, isPriorityRulesChange, isSummaryChange, isReviewChange, isCacheChange,
+    createStore, readDetails, isSubscriptionChange, isDetailsChange, isFilterChange, isPriorityRulesChange, isSummaryChange, isReviewChange, isCacheChange,
     activityToken, validateActivity, sourceFingerprint, reviewKey, cacheKey,
-    REVIEW_PREFIX, CACHE_PREFIX, CACHE_RESET_KEY, REVIEW_RESET_KEY, CACHE_LIMIT, CACHE_AGE_MS
+    REVIEW_PREFIX, CACHE_PREFIX, DETAILS_PREFIX, DETAILS_RECHECK_MS, CACHE_RESET_KEY, REVIEW_RESET_KEY, CACHE_LIMIT, CACHE_AGE_MS
   };
 });
