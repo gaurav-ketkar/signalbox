@@ -6,3 +6,4 @@ test-results/
 *.log
 priority-config.local.json
 
+dist/

@@ -7,7 +7,11 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:browser": "node --test test/browser.test.cjs",
-    "test:local": "node --test test/local-model.test.cjs"
+    "test:local": "node --test test/local-model.test.cjs",
+    "preversion": "npm test && npm run test:browser",
+    "version": "node scripts/release.mjs sync && git add manifest.json README.md CHANGELOG.md",
+    "postversion": "git push --follow-tags",
+    "package": "node scripts/release.mjs package"
   },
   "devDependencies": {
     "playwright": "^1.63.0"

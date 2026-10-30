@@ -28,10 +28,7 @@ No build step required. Keep costs at **$0** with 100% local inference, or mix a
 
 ## Install
 
-1. Clone this repo:
-   ```bash
-   git clone https://github.com/gaurav-ketkar/signalbox.git
-   ```
+1. Download `signalbox-vX.Y.Z.zip` from the [latest release](https://github.com/gaurav-ketkar/signalbox/releases/latest) and unzip it. (Or clone this repo.)
 2. Open `chrome://extensions` in Chrome (120+) and enable **Developer mode**.
 3. Click **Load unpacked** and select the `signalbox` folder.
 4. Pin **Signalbox** in Chrome's toolbar and refresh your open GitHub tabs.

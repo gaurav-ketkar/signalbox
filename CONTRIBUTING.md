@@ -22,6 +22,24 @@ npm test
 npm run test:browser
 ```
 
+## Releasing
+
+Maintainers only. Versions follow [Semantic Versioning](https://semver.org/).
+
+1. Add the release notes under `## [Unreleased]` in `CHANGELOG.md` and commit them.
+2. On a clean `main`, run `npm version patch`, `minor`, or `major`.
+
+That one command:
+
+- runs both test suites;
+- bumps `package.json`, `package-lock.json`, `manifest.json`, and the README version;
+- moves the Unreleased notes under a dated heading and updates the compare links;
+- commits `Release vX.Y.Z`, creates the `vX.Y.Z` tag, and pushes both.
+
+The tag starts the [Release workflow](.github/workflows/release.yml). It checks the tag matches the manifest, runs the unit tests, builds `signalbox-vX.Y.Z.zip`, and publishes a GitHub Release with the changelog notes and the zip attached.
+
+Don't edit version numbers or create tags or Releases by hand. To check the zip locally, run `npm run package` and look in `dist/`.
+
 ## License
 
 By contributing to this repository, you agree that your contributions will be licensed under the [Apache-2.0 License](LICENSE).
