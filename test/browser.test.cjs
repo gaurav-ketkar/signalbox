@@ -1866,6 +1866,37 @@ test("caught-up markers persist, undo across tabs, and let new activity return w
   assert.ok(routeState.requests.every((request) => request.method === "GET"));
 });
 
+test("quotes, code, retractions, and tasks reach the model as markdown cues", async () => {
+  routeState.rows = [fixture.pages[0][2]];
+  routeState.next = null;
+  await seed([fixture.subscriptions[1]]);
+  await enableSummaries();
+  routeState.previewHtml = fixture.commentPage({ body: [
+    "<blockquote><p>@you, we should drop Safari 15 support.</p><blockquote><p>Agreed.</p></blockquote></blockquote>",
+    "<p>I disagree. <del>Ship it</del> Hold it. Run <code>npm test</code>.</p>",
+    "<pre><code>Error: @you timeout\n  at run()</code></pre>",
+    "<ul><li><input type=\"checkbox\" checked disabled> Audit usage</li><li><input type=\"checkbox\" disabled> Update docs</li></ul>",
+    "<details><summary>Logs</summary><p>Long log text</p></details>",
+    "<div class=\"email-hidden-reply\"><div class=\"email-quoted-reply\">On Tue, lee wrote:\n&gt; Please confirm.</div>",
+    "<div class=\"email-signature-reply\">Reply to this email directly or view it on GitHub.</div></div>"
+  ].join("") });
+  await openFilter();
+  await complete();
+  await page.getByRole("button", { name: "Summarize comments", exact: true }).click();
+  await summarized(1);
+  const call = (await aiState()).calls.find((entry) => entry.url.endsWith("/api/chat"));
+  const sent = JSON.parse(call.body.messages[1].content);
+  assert.match(sent.text, /^> @you, we should drop Safari 15 support\.\n>\n> > Agreed\.$/m);
+  assert.match(sent.text, /^I disagree\. ~~Ship it~~ Hold it\. Run `npm test`\.$/m);
+  assert.match(sent.text, /^```\nError: @you timeout\n  at run\(\)\n```$/m);
+  assert.match(sent.text, /^\[x\] Audit usage$/m);
+  assert.match(sent.text, /^\[ \] Update docs$/m);
+  assert.match(sent.text, /^Collapsed section: Logs$/m);
+  assert.match(sent.text, /^> On Tue, lee wrote:\n> Please confirm\.$/m);
+  assert.doesNotMatch(sent.text, /Reply to this email/);
+  assert.equal(sent.directRequestPossible, false);
+});
+
 test("saved snapshots work offline and rechecks reuse unchanged sources but replace edited summaries", async () => {
   routeState.rows = [fixture.pages[0][2]];
   routeState.next = null;

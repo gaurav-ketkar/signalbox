@@ -84,3 +84,10 @@ test("summary fallback extracts React embeddedData JSON or thread content when e
   assert.match(extracted.text, /pre-release verification step/);
   assert.match(extracted.text, /smoke test checklist/);
 });
+
+test("raw markdown drops hidden template comments but keeps quotes and code", () => {
+  assert.equal(
+    preview.cleanMarkdown("<!-- Describe the bug -->\n> We should drop Safari 15.\n\n\n\nI disagree.\n```\nlog @sam\n```"),
+    "> We should drop Safari 15.\n\nI disagree.\n```\nlog @sam\n```"
+  );
+});

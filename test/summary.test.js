@@ -889,7 +889,12 @@ test("the output schema forbids response claims when no exact mention exists or 
     [{ viewer: "sam", author: "sam", text: "@sam, please review this." }, false],
     [{ viewer: "sam", author: "ada", text: "@sam-team, please review this." }, false],
     [{ viewer: "sam", author: "ada", text: "Could you review this?", directRequestPossible: true }, false],
-    [{ viewer: "", author: "ada", text: "@sam, please review this." }, false]
+    [{ viewer: "", author: "ada", text: "@sam, please review this." }, false],
+    [{ viewer: "sam", author: "ada", text: "> @sam, please review this.\n\nDone, I merged it myself." }, false],
+    [{ viewer: "sam", author: "ada", text: "On Tue, lee wrote:\n> > @sam can you check?\n\nAll good now." }, false],
+    [{ viewer: "sam", author: "ada", text: "```\nTODO(@sam): review\n```\nLogs above." }, false],
+    [{ viewer: "sam", author: "ada", text: "Run `notify @sam` to test. ~~@sam please review~~ Never mind." }, false],
+    [{ viewer: "sam", author: "ada", text: "> We should drop Safari 15.\n\nI disagree. @sam can you pull the numbers?" }, true]
   ]) {
     const http = fakeHttp([tags(), chat()]);
     await summary.summarize({ ...SOURCE, ...change }, http);
@@ -1143,4 +1148,24 @@ test("summary signals are optional, validated, and deadlines must be quoted from
   assert.equal((await summary.summarize(source, fakeHttp([tags(), chat(quoted)]))).deadline, "by Friday");
   const invented = { ...legacy, blocker: false, resolved: false, deadline: "by Monday" };
   assert.equal((await summary.summarize(source, fakeHttp([tags(), chat(invented)]))).deadline, "");
+  const quotedSource = { ...SOURCE, text: "> Can we ship by Friday?\n\nNo, the date is not set yet." };
+  const fromQuote = { ...legacy, blocker: false, resolved: false, deadline: "by Friday" };
+  assert.equal((await summary.summarize(quotedSource, fakeHttp([tags(), chat(fromQuote)]))).deadline, "");
+});
+
+test("evidence copied from a quote cannot make a needs_response", async () => {
+  const source = { ...SOURCE, viewer: "sam", author: "ada", text: "> @sam, please review the cache fix.\n\n@sam, thanks. No review needed now." };
+  const output = { summary: "@ada asked you to review the cache fix.", action: "You: review the cache fix.", response: "needs_response", evidence: "@sam, please review the cache fix." };
+  const result = await summary.summarize(source, fakeHttp([tags(), chat(output)]));
+  assert.equal(result.response, "unclear");
+  assert.equal(result.evidence, "");
+});
+
+test("the prompt explains quotes, code, retractions, tasks, and teams", async () => {
+  const http = fakeHttp([tags(), chat()]);
+  await summary.summarize(SOURCE, http);
+  const prompt = JSON.parse(http.calls[1].options.body).messages[0].content;
+  for (const cue of [/'>' are QUOTED/, /'On <date>, <name> wrote:'/, /``` fences/, /Struck-through/, /'\[x\]'/, /@org\/team/]) {
+    assert.match(prompt, cue);
+  }
 });

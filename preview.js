@@ -22,14 +22,34 @@
     return candidates.filter((node) => !candidates.some((other) => other !== node && other.contains(node)));
   }
 
+  function quoteLines(text, onlyUnmarked = false) {
+    const lines = text.replace(/^\s*\n|\s+$/g, "").split("\n").map((line) => line.trim());
+    return lines.map((line) => !line ? ">" : onlyUnmarked && line.startsWith(">") ? line : `> ${line}`).join("\n");
+  }
+
+  // Keep the markdown cues the model needs to tell the author's words from quotes, code, and retractions.
   function cleanBodyNode(node) {
     const body = node.cloneNode(true);
-    body.querySelectorAll(`script, style, template, noscript, iframe, object, form, button, input, svg, ${COMPOSER_PREVIEW_SELECTOR}`).forEach((child) => child.remove());
+    body.querySelectorAll("input[type='checkbox']").forEach((child) => child.replaceWith(child.checked || child.hasAttribute("checked") ? "[x]" : "[ ]"));
+    body.querySelectorAll(`script, style, template, noscript, iframe, object, form, button, input, svg, .email-hidden-toggle, .email-signature-reply, ${COMPOSER_PREVIEW_SELECTOR}`).forEach((child) => child.remove());
+    body.querySelectorAll("pre").forEach((child) => child.replaceWith(`\n\`\`\`\n${(child.textContent || "").replace(/\s+$/, "")}\n\`\`\`\n`));
+    body.querySelectorAll("code").forEach((child) => child.replaceWith(`\`${child.textContent || ""}\``));
+    body.querySelectorAll("del, s, strike").forEach((child) => child.replaceWith(`~~${child.textContent || ""}~~`));
+    body.querySelectorAll("details > summary").forEach((child) => child.prepend("Collapsed section: "));
     body.querySelectorAll("br").forEach((child) => child.replaceWith("\n"));
-    body.querySelectorAll("p, div, pre, blockquote, li, h1, h2, h3, h4, h5, h6, tr").forEach((child) => child.append("\n"));
+    body.querySelectorAll("p, div, blockquote, li, h1, h2, h3, h4, h5, h6, tr, summary").forEach((child) => child.append("\n"));
     body.querySelectorAll("img").forEach((child) => child.replaceWith(child.alt ? `[Image: ${child.alt}]` : "[Image]"));
+    // Innermost quotes first, so a quote inside a quote becomes "> > ".
+    [...body.querySelectorAll("blockquote, .email-quoted-reply")].reverse().forEach((child) => {
+      child.replaceWith(`\n${quoteLines(child.textContent || "", !child.matches("blockquote"))}\n\n`);
+    });
     const text = (body.textContent || "").replace(/\r\n?/g, "\n").replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n").trim();
     return PLACEHOLDER_TEXT.test(text) ? "" : text;
+  }
+
+  // Raw markdown keeps quotes and fences already; hidden template comments are not part of what people see.
+  function cleanMarkdown(text) {
+    return text.replace(/<!--[\s\S]*?-->/g, "").replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n").trim();
   }
 
   function cleanHtmlFragment(html, document) {
@@ -53,7 +73,7 @@
         for (const item of node) visit(item);
         return;
       }
-      const rawText = typeof node.body === "string" && node.body.trim() ? node.body.trim() :
+      const rawText = typeof node.body === "string" && cleanMarkdown(node.body) ? cleanMarkdown(node.body) :
         typeof node.bodyText === "string" && node.bodyText.trim() ? node.bodyText.trim() :
         typeof node.bodyHTML === "string" ? cleanHtmlFragment(node.bodyHTML, document) :
         typeof node.bodyHtml === "string" ? cleanHtmlFragment(node.bodyHtml, document) : "";
@@ -265,5 +285,5 @@
     return readComment(parse(html), target, { allowFallback });
   }
 
-  return { readComment, load };
+  return { readComment, load, cleanMarkdown };
 });

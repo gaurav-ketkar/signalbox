@@ -7,6 +7,10 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+### Fixed
+- **Quote replies are read correctly:** When someone quotes a comment (`> …`) and replies under it, the summary now treats the quote as the other person's view and summarizes the reply. An old ask that someone quotes back no longer marks an item as needing your reply. Summaries refresh once to pick this up.
+- **More comment cues reach the AI:** Code blocks and logs, struck-through text, task checkboxes, collapsed sections, and quoted email replies keep their markers. A mention inside code or crossed-out text no longer counts as a request. Hidden issue-template comments and email reply footers are dropped.
+
 ---
 
 ## [1.9.0] - 2026-11-03
