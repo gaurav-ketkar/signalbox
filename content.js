@@ -200,37 +200,116 @@
     }
   }
 
-  function computeItemPriority(current, item) {
-    if (current?.prioritySnapshot?.has(item.key)) {
-      return current.prioritySnapshot.get(item.key);
-    }
+  function scoreItem(current, item, now = Date.now()) {
     return core.scorePriority(item, {
+      now,
       subscribed: subscriptions.has(item.key),
       author: current?.authors?.get(item.key) || "",
       summaryResponse: current?.responses?.get(item.key) || "",
       kev: current?.kevScores?.get(item.key) || null,
+      contentSignals: current?.contentSignals?.get(item.key) || null,
       rules: priorityRules
     });
   }
 
+  function computeItemPriority(current, item) {
+    if (current?.prioritySnapshot?.has(item.key)) {
+      return current.prioritySnapshot.get(item.key);
+    }
+    return scoreItem(current, item);
+  }
+
   function lockPrioritySnapshot(current) {
     if (!current || current.priorityOrder?.length) return;
+    const now = Date.now();
     const entries = [...current.items.values()]
-      .map((item) => ({
-        item,
-        priority: core.scorePriority(item, {
-          subscribed: subscriptions.has(item.key),
-          author: current.authors?.get(item.key) || "",
-          summaryResponse: current.responses?.get(item.key) || "",
-          kev: current.kevScores?.get(item.key) || null,
-          rules: priorityRules
-        })
-      }))
+      .map((item) => ({ item, priority: scoreItem(current, item, now) }))
       .filter(({ priority }) => priority.qualifies)
       .sort((left, right) => right.priority.score - left.priority.score ||
         (Date.parse(right.item.dateTime || "") || 0) - (Date.parse(left.item.dateTime || "") || 0));
     current.priorityOrder = entries.map(({ item }) => item.key);
     current.prioritySnapshot = new Map(entries.map(({ item, priority }) => [item.key, priority]));
+    current.snapshotAt = now;
+  }
+
+  // Items whose summary or Kev result changed their place since the list was locked.
+  // Scores are compared at the lock time so normal recency decay does not count as a move.
+  function movedPriorityItems(current) {
+    if (!current?.priorityOrder || !current.prioritySnapshot) return [];
+    const isToday = current.mode === "today";
+    const at = current.snapshotAt || Date.now();
+    const moved = [];
+    for (const item of current.items.values()) {
+      if (!current.showCaughtUp && caughtUp(current, item)) continue;
+      const before = current.prioritySnapshot.get(item.key) || null;
+      const after = scoreItem(current, item, at);
+      const wasShown = !!before && (!isToday || before.tier === "P1");
+      const isShown = after.qualifies && (!isToday || after.tier === "P1");
+      if (wasShown !== isShown) moved.push(item);
+      else if (isShown && (before.tier !== after.tier || Math.abs(before.score - after.score) >= 5)) moved.push(item);
+    }
+    return moved;
+  }
+
+  function resortPriority(current) {
+    if (!current) return;
+    current.priorityOrder = null;
+    current.prioritySnapshot = null;
+    lockPrioritySnapshot(current);
+    saveScanCache(current);
+    renderView(current);
+  }
+
+  // Summaries near the Priority (35) or P1 (70) line are the ones most likely to change the order.
+  function summaryJobPriority(current, item) {
+    const score = scoreItem(current, item).score;
+    if (current?.mode !== "priority" && current?.mode !== "today") return score;
+    const lines = current.mode === "today" ? [70] : [core.PRIORITY_THRESHOLD, 70];
+    const distance = Math.min(...lines.map((line) => Math.abs(score - line)));
+    return distance <= 12 ? 200 - distance : score;
+  }
+
+  function summarySignals(result) {
+    if (!result || typeof result !== "object") return null;
+    const signals = {
+      blocker: result.blocker === true,
+      resolved: result.resolved === true,
+      deadline: typeof result.deadline === "string" ? result.deadline.trim().slice(0, 80) : ""
+    };
+    return signals.blocker || signals.resolved || signals.deadline ? signals : null;
+  }
+
+  function effectiveSummaryResponse(result, viewer) {
+    return result.response !== "needs_response" && viewerHasAskInText(result.summary, result.action, viewer) ?
+      "needs_response" : result.response;
+  }
+
+  function applySummaryRecord(current, item, record) {
+    const result = record?.result;
+    if (!current || !result) return "";
+    const response = effectiveSummaryResponse(result, current.viewer || signedInLogin());
+    current.responses?.set(item.key, response);
+    const signals = summarySignals(result);
+    if (signals) current.contentSignals?.set(item.key, signals);
+    else current.contentSignals?.delete(item.key);
+    if (current.authors && record.author) current.authors.set(item.key, record.author);
+    return response;
+  }
+
+  function viewerHasAskInText(text, actionText, viewer) {
+    if (!viewer) return false;
+    const escaped = viewer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (actionText && new RegExp(`^(?:@?${escaped}|you)\\b`, "i").test(actionText.trim())) {
+      return true;
+    }
+    const askToViewer = new RegExp(
+      `(?:@${escaped}\\s+(?:needs?\\s+to|should|must|to\\s+)|` +
+      `(?:asked|asking|needs?|waiting\\s+(?:on|for)|assigned\\s+(?:to)?|pinged|requested(?:\\s+that)?)\\s+@${escaped}\\b|` +
+      `\\byou\\s+(?:need\\s+to|should|must)\\b|` +
+      `(?:asked|asking|waiting\\s+(?:on|for))\\s+you\\b)`,
+      "i"
+    );
+    return askToViewer.test(text);
   }
 
   function classifyItemSweep(current, item) {
@@ -367,6 +446,7 @@
       if (view === current) {
         current.kevDone = true;
         saveScanCache(current);
+        renderView(current);
       }
     } catch {
       current.kevOffline = true;
@@ -418,11 +498,28 @@
     }
   }
 
+  // Undo stays for 10 seconds, and longer while the pointer or keyboard focus is on it.
+  function scheduleUndoExpiry(current) {
+    clearTimeout(current.undoTimer);
+    if (!current.undoItem) return;
+    const expire = () => {
+      if (view !== current || !current.undoItem) return;
+      if (current.undo.matches(":hover, :focus")) {
+        current.undoTimer = setTimeout(expire, 2000);
+        return;
+      }
+      current.undoItem = null;
+      renderView(current);
+    };
+    current.undoTimer = setTimeout(expire, 10000);
+  }
+
   async function changeCaughtUp(current, item, reviewed) {
     try {
       await localAction({ type: "gns:set-caught-up", viewer: current.viewer, item, caughtUp: reviewed });
       if (view !== current) return;
       current.undoItem = reviewed ? item : null;
+      scheduleUndoExpiry(current);
       await loadReviews(current);
       if (reviewed && !current.showCaughtUp) current.undo.focus({ preventScroll: true });
     } catch (error) {
@@ -1127,13 +1224,16 @@
     const count = element("span", "gns-counter", "");
     const live = element("span", "gns-live");
     live.setAttribute("aria-hidden", "true");
-    heading.append(title, count, live);
+    const resort = button("", "gns-resort", () => {
+      if (view) resortPriority(view);
+    });
+    resort.hidden = true;
     const actions = element("div", "gns-actions gns-header-actions");
 
     const status = element("p", "gns-status");
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
-    const pause = button("Pause", "gns-text-button", () => {
+    const pause = button("Pause", "gns-text-button gns-inline-action", () => {
       if (!view) return;
       if (view.state.running && !view.paused) {
         view.paused = true;
@@ -1152,19 +1252,9 @@
     refresh.title = "Refresh: search the inbox again";
     const summaryNote = element("p", "gns-summary-note");
     summaryNote.setAttribute("role", "status");
-    const summarize = button("Summarize comments", "gns-button", () => {
-      if (!view) return;
-      view.summariesPaused = false;
-      for (const tools of [...view.commentTools.values()].sort((left, right) => right.priority() - left.priority())) {
-        if (tools.canStart()) tools.startSummary();
-      }
-    });
-    summarize.title = "Summarize linked comments locally. Fetching them may mark notifications read.";
-    const stop = button("Stop summaries", "gns-text-button", () => {
-      if (view) stopSummaries(view);
-    });
-    const settings = button("", "gns-icon-button gns-settings", openSummarySettings);
-    settings.append(icon("M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6M10 3v3M6 10v3"));
+    const summarize = button("Summarize", "gns-button gns-summarize", () => summaryPrimaryAction(view));
+    const settings = button("AI settings", "gns-text-button gns-settings", openSummarySettings);
+    const manage = button("Manage list", "gns-text-button", openManager);
     const reviewNote = element("p", "gns-review-note");
     const showCaughtUp = button("Show caught up (0)", "gns-text-button", () => {
       if (!view) return;
@@ -1188,7 +1278,7 @@
     menu.setAttribute("aria-label", "Status and options");
     menu.setAttribute("aria-expanded", "false");
     menu.setAttribute("aria-controls", menuPanel.id);
-    menu.title = "Search status, summary status, caught-up items, and notes";
+    menu.title = "AI settings, manage list, caught-up items, and search status";
     function setMenu(open) {
       menuPanel.hidden = !open;
       menu.setAttribute("aria-expanded", String(open));
@@ -1203,21 +1293,17 @@
     document.addEventListener("click", (event) => {
       if (!menuPanel.hidden && !menuWrap.contains(event.target)) setMenu(false);
     }, { signal: listeners.signal });
-    const section = (...nodes) => {
-      const node = element("div", "gns-menu-section");
-      node.append(...nodes);
-      return node;
-    };
     const unidentified = element("p", "gns-footnote gns-unidentified");
     unidentified.hidden = true;
     menuPanel.append(
-      section(status),
-      section(summaryNote),
-      section(reviewNote, showCaughtUp),
-      section(note, unidentified)
+      menuSection("Summaries", summaryNote, settings),
+      menuSection("List", reviewNote, showCaughtUp, manage),
+      menuSection("Search", status, unidentified),
+      menuSection("", note)
     );
     menuWrap.append(menu, menuPanel);
-    actions.append(undo, pause, summarize, stop, refresh, settings, menuWrap, button("Manage list", "gns-button", openManager));
+    heading.append(title, count, live, pause, resort);
+    actions.append(undo, summarize, refresh, menuWrap);
     header.append(heading, actions);
 
     const localError = element("p", "gns-local-error");
@@ -1319,11 +1405,12 @@
       emptyTitle, emptyText, add, state: scanner.createState(INBOX), items: new Map(),
       rendered: new Map(), controller: null, previewController: new AbortController(), commentTools: new Map(),
       authors: new Map(), responses: new Map(), kevScores: new Map(), kevOffline: false, kevDone: false,
-      priorityOrder: null, prioritySnapshot: null,
+      contentSignals: new Map(), priorityOrder: null, prioritySnapshot: null, snapshotAt: 0,
+      resort, closeCallsStarted: false,
       briefingCard, briefingStatus, briefingWarning, briefingHeadline, briefingBody, briefingMeta, briefingRegenerate,
       briefingKey: "", briefingResult: null, briefingError: "", briefingRequest: null,
       sweepBar, sweepReview, sweepTeam, sweepParticipating, sweepAll, sweepStatus, sweeping: false, sweepMessage: "",
-      summaryNote, summarize, stopSummaries: stop, summarySettingsButton: settings,
+      summaryNote, summarize, summarySettingsButton: settings, menuButtonAttention: menu,
       reviewNote, showCaughtUpButton: showCaughtUp, undo, undoItem: null,
       localErrorNode: localError, localError: "", reviews: new Map(), reviewsReady: false,
       reviewVersion: 0, viewer: signedInLogin(), showCaughtUp: false,
@@ -1342,19 +1429,8 @@
     live.setAttribute("aria-hidden", "true");
     const summaryNote = element("p", "gns-summary-note");
     summaryNote.setAttribute("role", "status");
-    const summarize = button("Summarize comments", "gns-button", () => {
-      if (!nativeView) return;
-      nativeView.summariesPaused = false;
-      for (const tools of [...nativeView.commentTools.values()].sort((left, right) => right.priority() - left.priority())) {
-        if (tools.canStart()) tools.startSummary();
-      }
-    });
-    summarize.title = "Summarize linked comments locally. Fetching them may mark notifications read.";
-    const stop = button("Stop summaries", "gns-text-button", () => {
-      if (nativeView) stopSummaries(nativeView);
-    });
-    const settings = button("", "gns-icon-button gns-settings", openSummarySettings);
-    settings.append(icon("M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6M10 3v3M6 10v3"));
+    const summarize = button("Summarize", "gns-button gns-summarize", () => summaryPrimaryAction(nativeView));
+    const settings = button("AI settings", "gns-text-button gns-settings", openSummarySettings);
 
     const note = element("p", "gns-footnote",
       "Loading or rechecking comments may mark notifications read. AI summarizes the linked comment or issue context; check the original before acting.");
@@ -1367,7 +1443,7 @@
     menu.setAttribute("aria-label", "Status and options");
     menu.setAttribute("aria-expanded", "false");
     menu.setAttribute("aria-controls", menuPanel.id);
-    menu.title = "Summary status and notes";
+    menu.title = "AI settings and summary status";
     function setMenu(open) {
       menuPanel.hidden = !open;
       menu.setAttribute("aria-expanded", String(open));
@@ -1382,14 +1458,9 @@
     document.addEventListener("click", (event) => {
       if (!menuPanel.hidden && !menuWrap.contains(event.target)) setMenu(false);
     }, { signal: listeners.signal });
-    const section = (...nodes) => {
-      const node = element("div", "gns-menu-section");
-      node.append(...nodes);
-      return node;
-    };
-    menuPanel.append(section(summaryNote), section(note));
+    menuPanel.append(menuSection("Summaries", summaryNote, settings), menuSection("", note));
     menuWrap.append(menu, menuPanel);
-    toolbar.append(live, summarize, stop, settings, menuWrap);
+    toolbar.append(live, summarize, menuWrap);
 
     return {
       isNative: true,
@@ -1404,11 +1475,12 @@
       authors: new Map(),
       responses: new Map(),
       kevScores: new Map(),
+      contentSignals: new Map(),
       kevOffline: false,
       summaryNote,
       summarize,
-      stopSummaries: stop,
       summarySettingsButton: settings,
+      menuButtonAttention: menu,
       reviews: new Map(),
       reviewsReady: true,
       reviewVersion: 0,
@@ -1427,6 +1499,24 @@
     };
   }
 
+  function menuSection(label, ...nodes) {
+    const node = element("div", "gns-menu-section");
+    if (label) node.append(element("p", "gns-menu-label", label));
+    node.append(...nodes);
+    return node;
+  }
+
+  // One header button: set up, summarize, or stop, depending on what is happening.
+  function summaryPrimaryAction(current) {
+    if (!current) return;
+    if (!summarySettings.model || summarySettingsError) return openSummarySettings();
+    if (current.summaryPending) return stopSummaries(current);
+    current.summariesPaused = false;
+    for (const tools of [...current.commentTools.values()].sort((left, right) => right.priority() - left.priority())) {
+      if (tools.canStart()) tools.startSummary();
+    }
+  }
+
   function renderSummaryControls(current) {
     if (view !== current && nativeView !== current) return;
     const tools = [...current.commentTools.values()];
@@ -1439,13 +1529,31 @@
       pending ? `${done} summarized / ${pending} waiting or running.` :
       `${done} summarized. ${current.summariesPaused ? "Summaries paused." : manualOnly ? "Manual row clicks only on." : summarySettings.automatic ? "Automatic summaries on." : "Automatic summaries off."} Loading comments may mark them read.`);
     current.summaryNote.dataset.failed = String(!!summarySettingsError);
-    current.summarize.hidden = !configured || manualOnly;
-    current.summarize.disabled = !ready || manualOnly || !tools.some((entry) => entry.canStart());
-    current.stopSummaries.hidden = pending === 0;
-    const settingsLabel = configured ? "AI settings" : "Set up local summaries";
-    current.summarySettingsButton.setAttribute("aria-label", settingsLabel);
-    current.summarySettingsButton.title = summarySettingsError ? `AI settings need attention: ${summarySettingsError}` : settingsLabel;
-    current.summarySettingsButton.dataset.attention = String(!!summarySettingsError || !configured);
+    const primary = current.summarize;
+    let label = "Summarize";
+    let name = "Summarize comments";
+    let hint = "Summarize linked comments. Fetching them may mark notifications read.";
+    if (summarySettingsError) {
+      label = "Fix AI settings";
+      name = "Fix AI settings";
+      hint = `AI settings need attention: ${summarySettingsError}`;
+    } else if (!configured) {
+      label = "Set up summaries";
+      name = "Set up local summaries";
+      hint = "Choose a local or cloud model for optional AI summaries.";
+    } else if (pending) {
+      label = `Stop · ${done}/${done + pending}`;
+      name = "Stop summaries";
+      hint = `${done} of ${done + pending} summarized. Stop the rest.`;
+    }
+    setText(primary, label);
+    primary.setAttribute("aria-label", name);
+    primary.title = hint;
+    primary.dataset.running = String(configured && pending > 0);
+    primary.hidden = configured && !pending && (manualOnly || !tools.some((entry) => entry.canStart()));
+    primary.disabled = !ready;
+    current.summarySettingsButton.title = summarySettingsError ? `AI settings need attention: ${summarySettingsError}` : "AI settings";
+    current.menuButtonAttention.dataset.attention = String(!!summarySettingsError);
     current.summaryPending = pending;
     renderLive(current);
   }
@@ -1809,22 +1917,6 @@
       return cleaned || text;
     }
 
-    function viewerHasAskInText(text, actionText, viewer) {
-      if (!viewer) return false;
-      const escaped = viewer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (actionText && new RegExp(`^(?:@?${escaped}|you)\\b`, "i").test(actionText.trim())) {
-        return true;
-      }
-      const askToViewer = new RegExp(
-        `(?:@${escaped}\\s+(?:needs?\\s+to|should|must|to\\s+)|` +
-        `(?:asked|asking|needs?|waiting\\s+(?:on|for)|assigned\\s+(?:to)?|pinged|requested(?:\\s+that)?)\\s+@${escaped}\\b|` +
-        `\\byou\\s+(?:need\\s+to|should|must)\\b|` +
-        `(?:asked|asking|waiting\\s+(?:on|for))\\s+you\\b)`,
-        "i"
-      );
-      return askToViewer.test(text);
-    }
-
     function rewriteViewerAsYou(text, viewer) {
       if (!text || !viewer) return text;
       const escaped = viewer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1866,8 +1958,7 @@
     function showSummary(record, checkedNow) {
       const result = record.result;
       const viewer = current.viewer || signedInLogin();
-      const effectiveResponse = result.response !== "needs_response" && viewerHasAskInText(result.summary, result.action, viewer) ?
-        "needs_response" : result.response;
+      const effectiveResponse = current.responses ? applySummaryRecord(current, item, record) : effectiveSummaryResponse(result, viewer);
       phase = "done";
       ai.dataset.response = effectiveResponse;
       ai.dataset.truncated = String(!!record.truncated);
@@ -1875,8 +1966,6 @@
       aiFallbackPill.hidden = !record.fallbackWarning;
       if (record.fallbackWarning) aiFallbackPill.title = record.fallbackWarning;
       aiTruncatedPill.hidden = !record.truncated;
-      if (current.responses) current.responses.set(item.key, effectiveResponse);
-      if (current.authors && record.author) current.authors.set(item.key, record.author);
       responseListener(effectiveResponse);
       setText(aiLabel, effectiveResponse === "needs_response" ? "Needs your response" :
         effectiveResponse === "fyi" ? "FYI" : "Unclear ask");
@@ -2018,7 +2107,7 @@
         viewer: current.viewer,
         text: commentLoaded && comment ? comment.text : ""
       });
-      const initialPriority = computeItemPriority(current, item).score;
+      const initialPriority = summaryJobPriority(current, item);
       current.summaryQueue.push({ signal, tokens: initialTokens, priority: initialPriority, run: async () => {
         try {
           signal.throwIfAborted();
@@ -2062,7 +2151,7 @@
             text: loaded.text,
             truncated: loaded.truncated
           });
-          const priorityScore = computeItemPriority(current, item).score;
+          const priorityScore = summaryJobPriority(current, item);
           const record = await summaryClient.request({
             type: "summarize", model, href: summaryHref, title: core.cleanText(item.title, 500),
             viewer: current.viewer, activity: storeApi.activityToken(item),
@@ -2179,7 +2268,7 @@
         if (summarySettings.automatic) startSummary(true);
       },
       pending: () => ["queued", "running"].includes(phase),
-      priority: () => computeItemPriority(current, item).score,
+      priority: () => summaryJobPriority(current, item),
       finished: () => phase === "done",
       failed: () => phase === "error",
       errorMessage: () => aiStatus.textContent || "",
@@ -2848,6 +2937,13 @@
       setText(current.sweepAll, `Sweep all noise (${totalSweep})`);
       setText(current.sweepStatus, current.sweepMessage);
     }
+    if (current.resort) {
+      const moved = isPriority && ready && current.priorityOrder ? movedPriorityItems(current).length : 0;
+      current.resort.hidden = !moved;
+      setText(current.resort, `${moved} moved · Re-sort`);
+      current.resort.title = `Summaries changed the priority of ${moved} ${moved === 1 ? "notification" : "notifications"}. Re-sort to update the list. The order stays put until you choose this.`;
+      current.resort.setAttribute("aria-label", current.resort.title);
+    }
     renderLive(current);
     if (isToday) {
       void updateTodayBriefing(current);
@@ -2855,6 +2951,89 @@
     if (isPriority && current.state.complete && !current.kevOffline && !current.kevRefining && !current.kevDone && current.items.size > 0) {
       void refinePriorityWithKev(current);
     }
+    if (isPriority && current.state.complete && current.priorityOrder && !current.closeCallsStarted) {
+      void summarizeCloseCalls(current);
+    }
+  }
+
+  // Summarize a few notifications just below the cutoff so a summary can promote them.
+  // Rows already on screen summarize themselves, so this only covers hidden ones.
+  async function summarizeCloseCalls(current) {
+    const model = summarySettings.model;
+    if (!model || summarySettingsError || !summarySettings.automatic || summarySettings.manualOnly ||
+        current.summariesPaused || !current.viewer || !current.reviewsReady) return;
+    current.closeCallsStarted = true;
+    const cutoff = current.mode === "today" ? 70 : core.PRIORITY_THRESHOLD;
+    const shown = new Set(current.mode === "today" ?
+      (current.priorityOrder || []).filter((key) => current.prioritySnapshot?.get(key)?.tier === "P1") :
+      current.priorityOrder || []);
+    const candidates = [...current.items.values()]
+      .filter((item) => !shown.has(item.key) && !current.responses.has(item.key) &&
+        !caughtUp(current, item) && core.summaryTarget(item.href))
+      .map((item) => ({ item, score: scoreItem(current, item).score }))
+      .filter(({ score }) => score >= cutoff - 15 && score < cutoff)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 12);
+    const signal = current.previewController.signal;
+    let changed = false;
+    for (const { item, score } of candidates) {
+      if (signal.aborted || view !== current) return;
+      const memKey = memorySummaryKey(current.viewer, model, item.key);
+      const activity = storeApi.activityToken(item);
+      let record = memKey ? memorySummaries.get(memKey) : null;
+      if (record && activity && record.activity && record.activity !== activity) record = null;
+      if (!record) {
+        try {
+          record = await store.getCachedSummary(current.viewer, item, model, false);
+        } catch {
+          record = null;
+        }
+        if (record && activity && record.activity && record.activity !== activity) record = null;
+        if (record && memKey) memorySummaries.set(memKey, record);
+      }
+      if (record) {
+        applySummaryRecord(current, item, record);
+        changed = true;
+        continue;
+      }
+      const target = core.summaryTarget(item.href);
+      current.summaryQueue.push({ signal, tokens: summaryApi.estimateTokens({ title: item.title, viewer: current.viewer }),
+        priority: 200 - Math.abs(score - cutoff), run: async () => {
+          if (signal.aborted || view !== current || current.summariesPaused || current.closeCallsFailed ||
+              model !== summarySettings.model) return;
+          try {
+            await checkModelOnce(current, model, signal);
+            const loaded = await preview.load(target, { signal, allowFallback: true });
+            void restoreUnreadState(item);
+            if (!loaded || signal.aborted || view !== current) return;
+            if (loaded.author) current.authors.set(item.key, loaded.author);
+            const title = core.cleanText(item.title, 500);
+            const tokens = summaryApi.estimateTokens({
+              title, author: loaded.author, viewer: current.viewer, text: loaded.text, truncated: loaded.truncated
+            });
+            const fresh = await summaryClient.request({
+              type: "summarize", model, href: `${target.url}#${target.id}`, title,
+              viewer: current.viewer, activity, author: loaded.author, dateTime: loaded.dateTime,
+              text: loaded.text, truncated: loaded.truncated, tokens,
+              contextWindow: current.contextWindow || summaryApi.contextWindowForModel(model),
+              priority: 200 - Math.abs(score - cutoff)
+            }, { signal });
+            if (!fresh?.result || signal.aborted || view !== current) return;
+            if (memKey) memorySummaries.set(memKey, fresh);
+            applySummaryRecord(current, item, fresh);
+            saveScanCache(current);
+            renderView(current);
+          } catch {
+            // A failed close call never blocks the list; stop the rest so one bad model does not repeat the error.
+            if (!signal.aborted) current.closeCallsFailed = true;
+          }
+        } });
+    }
+    if (changed && view === current) {
+      saveScanCache(current);
+      renderView(current);
+    }
+    if (current.summaryQueue.length) scheduleSummaries(current);
   }
 
   async function loadPage(current, url, signal) {
@@ -2926,12 +3105,16 @@
         if (cached.kevScores && typeof cached.kevScores === "object") {
           current.kevScores = new Map(Object.entries(cached.kevScores));
         }
+        if (cached.contentSignals && typeof cached.contentSignals === "object") {
+          current.contentSignals = new Map(Object.entries(cached.contentSignals));
+        }
         if (typeof cached.kevDone === "boolean") {
           current.kevDone = cached.kevDone;
         }
         if (Array.isArray(cached.priorityOrder) && cached.prioritySnapshot && typeof cached.prioritySnapshot === "object") {
           current.priorityOrder = cached.priorityOrder.filter((itemKey) => current.items.has(itemKey));
           current.prioritySnapshot = new Map(Object.entries(cached.prioritySnapshot));
+          current.snapshotAt = Number.isFinite(cached.snapshotAt) && cached.snapshotAt > 0 ? cached.snapshotAt : cached.checkedAt;
         }
         if (current.useDocument) {
           current.useDocument = false;
@@ -2975,7 +3158,9 @@
         authors: current.authors ? Object.fromEntries(current.authors) : {},
         responses: current.responses ? Object.fromEntries(current.responses) : {},
         kevScores: current.kevScores ? Object.fromEntries(current.kevScores) : {},
+        contentSignals: current.contentSignals ? Object.fromEntries(current.contentSignals) : {},
         kevDone: Boolean(current.kevDone),
+        snapshotAt: current.snapshotAt || 0,
         priorityOrder: current.priorityOrder || null,
         prioritySnapshot: current.prioritySnapshot ? Object.fromEntries(current.prioritySnapshot) : null
       }

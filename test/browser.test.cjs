@@ -1081,7 +1081,8 @@ test("manager opens from the injected controls via the service worker", async ()
   await seed();
   await openFilter();
   const newPage = context.waitForEvent("page");
-  await page.getByRole("button", { name: "Manage list", exact: true }).click();
+  await openMenu();
+  await page.locator(".gns-menu-panel").getByRole("button", { name: "Manage list", exact: true }).click();
   const manager = await newPage;
   await manager.waitForURL(`chrome-extension://${extensionId}/manager.html`);
   await manager.getByRole("heading", { name: "Subscriptions", exact: true }).waitFor();
@@ -1731,6 +1732,13 @@ test("shows local AI summaries and settings without narrow or dark layout overfl
   await summarized();
   await assertRowLayout("columns");
   await page.screenshot({ path: path.join(resultsPath, "summaries-desktop.png"), fullPage: true });
+  await openMenu();
+  for (const group of ["Summaries", "List", "Search"]) {
+    assert.equal(await page.locator(".gns-menu-panel .gns-menu-label", { hasText: group }).isVisible(), true);
+  }
+  await page.locator(".gns-panel-header").screenshot({ path: path.join(resultsPath, "header-menu.png") });
+  await page.screenshot({ path: path.join(resultsPath, "header-menu-page.png") });
+  await page.locator(".gns-menu-button").click();
   await page.locator(".gns-panel").evaluate((node) => { node.style.maxWidth = "680px"; });
   await assertRowLayout();
   await page.locator(".gns-panel").evaluate((node) => { node.style.maxWidth = ""; });

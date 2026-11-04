@@ -248,6 +248,7 @@
     author = "",
     summaryResponse = "",
     kev = null,
+    contentSignals = null,
     rules = DEFAULT_PRIORITY_RULES
   } = {}) {
     const contacts = rules?.contacts && typeof rules.contacts === "object" ? rules.contacts : DEFAULT_PRIORITY_RULES.contacts;
@@ -300,6 +301,16 @@
       askScore = Math.min(askScore, subscribed ? 16 : 8);
     }
 
+    // Summary signals: what the comment says, not just why GitHub notified.
+    const signals = contentSignals && typeof contentSignals === "object" ? contentSignals : {};
+    const contentResolved = signals.resolved === true && summaryResponse !== "needs_response" && reason !== "assign";
+    const contentBlocker = signals.blocker === true && !contentResolved;
+    const contentDeadline = !contentResolved && typeof signals.deadline === "string" ? signals.deadline.trim().slice(0, 80) : "";
+    if (contentResolved) askScore = Math.min(askScore, 8);
+    if (contentBlocker) askScore += 8;
+    if (contentDeadline) askScore += 5;
+    askScore = Math.min(45, askScore);
+
     let orgScore = 0;
     let orgMatch = null;
     const matchedContacts = new Map();
@@ -328,6 +339,7 @@
 
     const activeOpenAsk = !isClosedOrMerged && (
       summaryResponse === "needs_response" ||
+      !!contentDeadline ||
       (kev?.directAsk >= 0.5 && kev?.resolved < 0.5) ||
       (directReason && item?.unread && summaryResponse !== "fyi")
     );
@@ -369,6 +381,12 @@
       ...(isStaleThread && reason !== "assign" ? ["Stale >14d ×0.6"] : []),
       ...(isClosedOrMerged ? [`${item.state} ×0.45`] : [])
     ];
+    const contentParts = [
+      ...(contentResolved ? ["resolved"] : []),
+      ...(contentBlocker ? ["blocker +8"] : []),
+      ...(contentDeadline ? [`deadline "${contentDeadline}" +5`] : [])
+    ];
+    if (contentParts.length) parts.push(`Content: ${contentParts.join(", ")}`);
     return {
       score,
       tier,
@@ -387,9 +405,12 @@
     author = "",
     summaryResponse = "",
     kev = null,
+    contentSignals = null,
     rules = DEFAULT_PRIORITY_RULES
   } = {}) {
-    if (subscribed || summaryResponse === "needs_response" || kev?.response === "needs_response") {
+    const urgentContent = contentSignals?.resolved !== true &&
+      (contentSignals?.blocker === true || !!String(contentSignals?.deadline || "").trim());
+    if (subscribed || summaryResponse === "needs_response" || kev?.response === "needs_response" || urgentContent) {
       return { sweepable: false, bucket: "", label: "" };
     }
     const reason = String(item?.reason || "").trim().toLowerCase().replace(/[_ ]+/g, "-");
@@ -410,7 +431,7 @@
       (kev && kev.response === "fyi" && (kev.directAsk ?? 0) < 0.25 && (kev.blocker ?? 0) < 0.3);
     const staleOldComment = ["participating", "comment", "commented", "state-change"].includes(reason) &&
       item?.dateTime && (now - Date.parse(item.dateTime)) > 3 * 24 * 3600000 &&
-      !scorePriority(item, { now, subscribed, author, summaryResponse, kev, rules }).qualifies;
+      !scorePriority(item, { now, subscribed, author, summaryResponse, kev, contentSignals, rules }).qualifies;
     if (isClosedOrMerged || confirmedIrrelevantByAi || staleOldComment) {
       return { sweepable: true, bucket: "stale-participating", label: "Stale participating" };
     }

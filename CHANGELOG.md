@@ -7,6 +7,13 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+### Added
+- **Re-rank from summaries:** Summaries now also say whether a thread is blocked, already resolved, or has a deadline. Priority and Today use these to move items up or down. If the order would change, a **"N moved · Re-sort"** chip appears in the header, so rows never jump while you read.
+- **Close calls get summarized first:** Items just below the Priority or Today cutoff are summarized first, so they can move up if the comment shows a real ask.
+
+### Changed
+- **Calmer header:** One button now does it all: **Summarize**, then **Stop · 3/12** while running, then it hides when every row is done. **Pause** sits next to the search status and only shows while searching. **AI settings**, **Manage list**, **Show caught up**, and search details moved into the **···** menu in labeled groups. A red dot on **···** flags AI settings that need attention. **Undo caught up** fades after 10 seconds.
+
 ---
 
 ## [1.8.0] - 2026-10-30

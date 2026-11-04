@@ -693,9 +693,12 @@ test("chat uses only loopback, structured JSON, bounded generation, and no tools
       summary: { type: "string", minLength: 1, maxLength: 400 },
       action: { type: "string", maxLength: 200 },
       response: { type: "string", enum: ["fyi", "unclear"] },
-      evidence: { type: "string", maxLength: 0 }
+      evidence: { type: "string", maxLength: 0 },
+      blocker: { type: "boolean" },
+      resolved: { type: "boolean" },
+      deadline: { type: "string", maxLength: 80 }
     },
-    required: ["summary", "action", "response", "evidence"],
+    required: ["summary", "action", "response", "evidence", "blocker", "resolved", "deadline"],
     additionalProperties: false
   });
   assert.deepEqual(body.messages.map((message) => message.role), ["system", "user"]);
@@ -1122,4 +1125,22 @@ test("default fetch and optional callbacks work without ever making real HTTP re
   assert.deepEqual(await summary.listModels(), [{ id: MODEL, size: 7150000000 }]);
   assert.deepEqual(await summary.summarize(SOURCE), OUTPUT);
   assert.equal(http.calls.length, 3);
+});
+
+test("summary signals are optional, validated, and deadlines must be quoted from the comment", async () => {
+  const legacy = { summary: "A short update.", action: "", response: "fyi", evidence: "" };
+  assert.deepEqual(summary.validateResult(legacy), legacy);
+  const withSignals = { ...legacy, blocker: true, resolved: false, deadline: "by Friday" };
+  assert.deepEqual(summary.validateResult(withSignals), withSignals);
+  for (const bad of [
+    { ...legacy, blocker: "yes", resolved: false, deadline: "" },
+    { ...legacy, blocker: false, resolved: false, deadline: "x".repeat(81) },
+    { ...legacy, blocker: false, resolved: false }
+  ]) assert.throws(() => summary.validateResult(bad), /invalid summary/);
+
+  const source = { ...SOURCE, text: "We need this merged by Friday so the release can ship." };
+  const quoted = { ...legacy, blocker: true, resolved: false, deadline: "by  Friday" };
+  assert.equal((await summary.summarize(source, fakeHttp([tags(), chat(quoted)]))).deadline, "by Friday");
+  const invented = { ...legacy, blocker: false, resolved: false, deadline: "by Monday" };
+  assert.equal((await summary.summarize(source, fakeHttp([tags(), chat(invented)]))).deadline, "");
 });

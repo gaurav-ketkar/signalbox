@@ -20,7 +20,7 @@
   const LOCAL_PROVIDERS = Object.freeze(["splash", "lmstudio", "ollama", "mlx"]);
   const CLOUD_PROVIDERS = Object.freeze(["copilot", "openai", "anthropic", "gemini"]);
   const ALL_PROVIDERS = Object.freeze([...LOCAL_PROVIDERS, ...CLOUD_PROVIDERS]);
-  const SUMMARY_VERSION = 8;
+  const SUMMARY_VERSION = 9;
   const BRIEFING_VERSION = 2;
   const DEFAULT_CONTEXT_WINDOW = 131072;
   const MAX_PARALLEL_SUMMARIES = 64;
@@ -37,7 +37,7 @@
     "Use title only as context and author only for attribution, not as evidence of facts missing from the comment. When text labels separate sections with their own @author (such as Opening post vs Latest comment), attribute each part to its labeled author. Do not assume the author personally implemented reported work. Do not infer the triggering event, assignee, team membership, or whether a request was answered elsewhere.",
     "Skip GitHub issue-template headings, PR checklists, boilerplate checkboxes, and CI/bot table noise; distill only the human substance, decision, blocker, or metric.",
     "Preserve uncertainty, attribution, and negation. Never invent facts, deadlines, decisions, assignees, or requests. Do not turn a possibility into a decision.",
-    "Return only a JSON object with exactly four string properties: summary, action, response, evidence. No Markdown fences or other output.",
+    "Return only a JSON object with exactly these properties: summary, action, response, evidence (strings), blocker and resolved (booleans), and deadline (string). No Markdown fences or other output.",
     "summary: one or two short plain-English sentences, at most 400 characters, written the way you would explain this issue, pull request, or comment to a colleague. Because @viewer is the reader ('you'), whenever the comment asks, mentions, or expects something from @viewer, address @viewer in the second person as 'you' ('@ada asked you to review the fix' or 'You need to confirm the rollout'). Do not append 'Nothing needed from you' because the UI already displays an FYI pill when response is fyi. Use active voice and actual @handles for everyone else. Attribute reports and uncertain claims; do not present them as verified facts. Omit greetings, filler, and redundant title text.",
     "action: one short, explicit, current request, at most 200 characters. When the request is for @viewer, write 'You: <action>' (or '@viewer: <action>'); when for someone else, name that recipient. Keep the request even when response is fyi or unclear; if the recipient is unknown, write 'Recipient unspecified: review the fix' rather than dropping the request. Use an empty string for information, thanks, completed or withdrawn requests, and hypothetical or quoted instructions. Do not invent next steps, assign work to the reader, or repeat the whole summary.",
     "response: decide in this order. (1) An explicit request with an unnamed, ambiguous, or group/team recipient is unclear, NOT fyi. 'Could you review?' needs an action string and response=unclear because its recipient is unspecified. (2) A current explicit request addressed to exact @viewer is needs_response, but only if directRequestPossible is true and you can quote its evidence. (3) Information with no current request, or a request clearly belonging to a different named person, is fyi. Never choose fyi merely because a request lacks @viewer. A mention alone is not a request. Unknown viewer cannot be needs_response. A viewer's own comment is never a request awaiting that viewer.",
@@ -48,6 +48,10 @@
     'Example: author="ada", viewer="sam", text="@lee, please review the fix. @sam, thanks for the report." -> {"summary":"@ada asked @lee to review the fix and thanked @sam.","action":"@lee: review the fix.","response":"fyi","evidence":""}',
     'Example: author="ada", viewer="sam", text="Could you approve this? We may ship Friday." -> {"summary":"@ada asked for approval; shipping Friday is still tentative.","action":"Approve the change; recipient not specified.","response":"unclear","evidence":""}',
     'Example: author="ada", viewer="sam", text="Yesterday I asked @sam to review. That is done; no further review needed." -> {"summary":"@ada said the review is complete and no further review is needed.","action":"","response":"fyi","evidence":""}',
+    "blocker: true only when the text says a merge, launch, release, customer escalation, or decision is currently waiting on someone's input, approval, or sign-off. Routine discussion, finished work, or a possible future blocker is false.",
+    "resolved: true when the text says the request or problem is already done, answered, merged, withdrawn, or no longer needed, or when the comment is only thanks or acknowledgment. A current open request is never resolved.",
+    "deadline: copy the shortest deadline phrase verbatim from text (for example 'by Friday' or 'before the 3pm release'), at most 80 characters. Use an empty string when the text states no deadline. Never infer or invent a deadline, and never copy one from title.",
+    "Signal example: text=\"@sam can you approve before Friday's release? The merge is blocked on your sign-off.\" -> blocker=true, resolved=false, deadline=\"before Friday's release\". Text=\"Thanks, that fixed it!\" -> blocker=false, resolved=true, deadline=\"\".",
     "When truncated is true, text is only a partial comment: summarize only what is visible, do not guess what the missing text says, and do not state that the source is truncated or partial because the UI already displays a Partial pill."
   ].join("\n");
 
@@ -647,13 +651,17 @@
   }
 
   function validateResult(value, source) {
-    if (!isObject(value) || Object.keys(value).length !== 4 ||
+    // Summaries saved before version 9 have no blocker, resolved, or deadline signals.
+    const hasSignals = isObject(value) && Object.keys(value).length === 7;
+    if (!isObject(value) || (Object.keys(value).length !== 4 && !hasSignals) ||
+        (hasSignals && (typeof value.blocker !== "boolean" || typeof value.resolved !== "boolean" ||
+          typeof value.deadline !== "string" || value.deadline.length > 80)) ||
         typeof value.summary !== "string" || !value.summary.trim() || value.summary.length > 400 ||
         typeof value.action !== "string" || value.action.length > 200 || (value.action !== "" && !value.action.trim()) ||
         !["needs_response", "fyi", "unclear"].includes(value.response) ||
         typeof value.evidence !== "string" || value.evidence.length > 500 ||
         (value.response === "needs_response" ? !value.action || !value.evidence.trim() : value.evidence !== "")) {
-      throw new LocalSummaryError("The local model returned an invalid summary: expected summary (1-400 characters), action (0-200), response (needs_response, fyi, or unclear), and evidence (0-500). Retry or choose another local model.");
+      throw new LocalSummaryError("The local model returned an invalid summary: expected summary (1-400 characters), action (0-200), response (needs_response, fyi, or unclear), evidence (0-500), and optional blocker, resolved, and deadline (0-80) signals. Retry or choose another local model.");
     }
     const normalized = (text) => text.trim().replace(/\s+/g, " ").toLowerCase();
     if (value.action && normalized(value.action) === normalized(value.summary)) {
@@ -669,7 +677,14 @@
         evidence = "";
       }
     }
-    return { summary: value.summary, action: value.action, response, evidence };
+    const result = { summary: value.summary, action: value.action, response, evidence };
+    if (!hasSignals) return result;
+    return {
+      ...result,
+      blocker: value.blocker,
+      resolved: value.resolved && response !== "needs_response",
+      deadline: value.deadline.trim()
+    };
   }
 
   function exactSourceEvidence(text, evidence) {
@@ -714,7 +729,10 @@
       if (!(error instanceof SyntaxError)) throw error;
       throw new LocalSummaryError("The local model did not return the requested summary JSON. Retry or choose another local model.");
     }
-    return validateResult(value, source);
+    const summary = validateResult(value, source);
+    // A deadline counts only when it is quoted from the comment, not invented by the model.
+    if (summary.deadline) summary.deadline = exactSourceEvidence(String(source?.text || ""), summary.deadline).slice(0, 80);
+    return summary;
   }
 
   function stripCloudMarkdownFence(text) {
@@ -917,9 +935,12 @@
         summary: { type: "string", minLength: 1, maxLength: 400 },
         action: { type: "string", maxLength: 200 },
         response: { type: "string", enum: directRequestPossible ? ["needs_response", "fyi", "unclear"] : ["fyi", "unclear"] },
-        evidence: { type: "string", maxLength: directRequestPossible ? 500 : 0 }
+        evidence: { type: "string", maxLength: directRequestPossible ? 500 : 0 },
+        blocker: { type: "boolean" },
+        resolved: { type: "boolean" },
+        deadline: { type: "string", maxLength: 80 }
       },
-      required: ["summary", "action", "response", "evidence"],
+      required: ["summary", "action", "response", "evidence", "blocker", "resolved", "deadline"],
       additionalProperties: false
     };
     const userContent = JSON.stringify({ title, author, viewer, directRequestPossible, text, truncated });

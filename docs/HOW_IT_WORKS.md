@@ -27,6 +27,17 @@ Signalbox places **Today**, **Priority**, and **Subscriptions** at the very top 
   - Stale threads (`>14 days`) are damped by `×0.6`.
   - Closed or merged issues/PRs are damped by `×0.45`.
 
+- **Content signals from summaries (0 to +13, or a cap):** Once a row is summarized, its summary can add:
+  - `blocker` (+8): the comment says work is blocked.
+  - `deadline` (+5): a date or time quoted word for word from the comment, never from the title. Also counts as an open ask.
+  - `resolved`: caps the ask points at 8, unless the summary says you need to respond or you're assigned.
+  Unresolved blockers and deadlines also keep an item out of Quick Sweep.
+
+### Re-sort and Close Calls
+Summaries can change an item's score after the list is pinned. Signalbox doesn't reorder rows while you read. Instead, it compares live scores with the pinned ones and shows **"N moved · Re-sort"** when items would cross the cutoff, change tier, or move 5+ points. Click it to re-pin the list.
+
+With automatic summaries on, Signalbox summarizes **close calls** first: up to 12 hidden items scoring within 15 points below the cutoff (35 for Priority, 70 for Today). If a summary pushes one over, Re-sort offers to bring it in.
+
 ### 4-Hour Pinned Workday Snapshot
 Once Priority finishes scanning, Signalbox locks the resulting item list and order for **4 hours** (and resets automatically the next calendar day or when you click **Refresh**). Clicking into an issue and navigating back will never reshuffle your list mid-triage.
 
@@ -95,6 +106,7 @@ HF_HOME="$HOME/Models/huggingface" splash serve \
 Allow only the exact extension origin, not `*`. If Ollama reports HTTP 403, allow the exact `chrome-extension://<extension-id>` origin through `OLLAMA_ORIGINS` and restart Ollama.
 
 ### Key Behaviors
+- **One header button:** **Summarize** turns into **Stop · done/total** while summaries run and hides when every row is done. AI settings, Manage list, Show caught up, and search status live in the **···** menu.
 - **Works on every filter view:** Injects **Summarize comments** and per-row **Summarize** controls on native GitHub views (`Inbox`, `Unread`, `Assigned`, `Mentioned`, `Participating`, `Review requested`, custom filters) as well as **Priority** and **Subscriptions**.
 - **Context-window parallel scheduling:** Queries the active model's context window (`contextWindowForModel`), estimates per-notification token usage (`estimateTokens`), and schedules concurrent summary jobs up to the token budget—prioritizing higher-scoring notifications first.
 - **Second-person actionable output:** Addresses the signed-in user (`meta[name="user-login"]`) as `"you"` and classifies every row into:

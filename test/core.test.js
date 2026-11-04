@@ -201,3 +201,33 @@ test("extension manifest limits access to storage, the active tab, GitHub, and l
     manifest.background.service_worker, manifest.action.default_popup.split("?")[0], manifest.options_ui.page
   ]) assert.equal(fs.existsSync(path.join(root, file)), true, file);
 });
+
+test("summary signals move priority: blockers and quoted deadlines raise it, resolved threads drop it", () => {
+  const now = Date.parse("2026-10-16T00:00:00Z");
+  const item = { reason: "comment", unread: true, dateTime: "2026-10-14T00:00:00Z" };
+  const base = core.scorePriority(item, { now });
+  const blocker = core.scorePriority(item, { now, contentSignals: { blocker: true, resolved: false, deadline: "" } });
+  assert.equal(blocker.askScore, base.askScore + 8);
+  assert.match(blocker.breakdown, /Content: blocker \+8/);
+
+  const deadline = core.scorePriority(item, { now, contentSignals: { blocker: false, resolved: false, deadline: "by Friday" } });
+  assert.equal(deadline.askScore, base.askScore + 5);
+  assert.ok(deadline.recencyScore > base.recencyScore, "a stated deadline keeps the SLA window open");
+  assert.match(deadline.breakdown, /deadline "by Friday" \+5/);
+
+  const resolved = core.scorePriority(item, { now, contentSignals: { blocker: true, resolved: true, deadline: "by Friday" } });
+  assert.ok(resolved.askScore <= 8);
+  assert.match(resolved.breakdown, /Content: resolved\)/);
+  assert.ok(resolved.score < base.score);
+
+  const assigned = core.scorePriority({ ...item, reason: "assign" }, { now, contentSignals: { resolved: true } });
+  assert.equal(assigned.askScore, core.scorePriority({ ...item, reason: "assign" }, { now }).askScore,
+    "assignment is ownership; a resolved comment does not clear it");
+  const needsYou = core.scorePriority(item, { now, summaryResponse: "needs_response", contentSignals: { resolved: true } });
+  assert.equal(needsYou.askScore, 45);
+
+  const sweep = { reason: "comment", dateTime: "2026-10-01T00:00:00Z" };
+  assert.equal(core.classifySweep(sweep, { now }).sweepable, true);
+  assert.equal(core.classifySweep(sweep, { now, contentSignals: { blocker: true } }).sweepable, false,
+    "blocked threads are not swept as noise");
+});
