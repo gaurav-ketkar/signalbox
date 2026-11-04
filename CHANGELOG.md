@@ -7,6 +7,10 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+---
+
+## [1.9.0] - 2026-11-03
+
 ### Added
 - **Re-rank from summaries:** Summaries now also say whether a thread is blocked, already resolved, or has a deadline. Priority and Today use these to move items up or down. If the order would change, a **"N moved · Re-sort"** chip appears in the header, so rows never jump while you read.
 - **Close calls get summarized first:** Items just below the Priority or Today cutoff are summarized first, so they can move up if the comment shows a real ask.
@@ -89,7 +93,8 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ![Signalbox v1.3.0 Native Filter View Summaries](docs/changelog/v1.3-native-summaries.png)
 
-[Unreleased]: https://github.com/gaurav-ketkar/signalbox/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/gaurav-ketkar/signalbox/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/gaurav-ketkar/signalbox/releases/tag/v1.6.0
