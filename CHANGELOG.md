@@ -7,6 +7,10 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+---
+
+## [1.9.1] - 2026-11-04
+
 ### Fixed
 - **Quote replies are read correctly:** When someone quotes a comment (`> …`) and replies under it, the summary now treats the quote as the other person's view and summarizes the reply. An old ask that someone quotes back no longer marks an item as needing your reply. Summaries refresh once to pick this up.
 - **More comment cues reach the AI:** Code blocks and logs, struck-through text, task checkboxes, collapsed sections, and quoted email replies keep their markers. A mention inside code or crossed-out text no longer counts as a request. Hidden issue-template comments and email reply footers are dropped.
@@ -97,7 +101,8 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ![Signalbox v1.3.0 Native Filter View Summaries](docs/changelog/v1.3-native-summaries.png)
 
-[Unreleased]: https://github.com/gaurav-ketkar/signalbox/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/gaurav-ketkar/signalbox/compare/v1.9.1...HEAD
+[1.9.1]: https://github.com/gaurav-ketkar/signalbox/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.6.0...v1.7.0
