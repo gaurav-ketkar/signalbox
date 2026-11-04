@@ -7,6 +7,10 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+---
+
+## [1.10.0] - 2026-11-04
+
 ### Added
 - **Saved items always show:** Every saved item now appears in Subscriptions, even when it has no inbox notification. Those rows are marked **Latest activity** and summarize the item's latest comment. Signalbox checks three pages at a time and reuses them for 10 minutes; **Refresh** checks again.
 
@@ -110,7 +114,8 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ![Signalbox v1.3.0 Native Filter View Summaries](docs/changelog/v1.3-native-summaries.png)
 
-[Unreleased]: https://github.com/gaurav-ketkar/signalbox/compare/v1.9.1...HEAD
+[Unreleased]: https://github.com/gaurav-ketkar/signalbox/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.9.1...v1.10.0
 [1.9.1]: https://github.com/gaurav-ketkar/signalbox/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/gaurav-ketkar/signalbox/compare/v1.7.0...v1.8.0
