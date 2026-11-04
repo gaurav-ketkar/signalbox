@@ -435,7 +435,7 @@ test("filters across all pages, deduplicates threads, and preserves tracking lin
   const titles = await page.locator(".gns-result-title").allTextContents();
   assert.deepEqual(titles, [
     "Tighten the release checklist", "Keep keyboard focus after saving",
-    "How should weekly digests work?", "Make notification preferences easier to find"
+    "Make notification preferences easier to find", "How should weekly digests work?"
   ]);
   assert.match(await page.locator(".gns-status").textContent(), /12 notifications checked across 3 pages/);
   assert.match(await page.locator(".gns-result-link").nth(1).getAttribute("href"), /notification_referrer_id=demo#issuecomment-123/);
@@ -453,19 +453,19 @@ test("keeps reasons, participants, item states, read status, and dates across ev
   await openFilter();
   await complete();
   assert.deepEqual(await page.locator(".gns-reason").allTextContents(), [
-    "assign", "mention", "subscribed", "team mention"
+    "assign", "mention", "team mention", "subscribed"
   ]);
   assert.equal(await page.locator(".gns-reason").nth(1).getAttribute("title"), "You were mentioned");
   assert.deepEqual(await page.locator(".gns-item-state").allTextContents(), ["Open", "Merged", "Closed"]);
   assert.deepEqual(await page.locator(".gns-participants").allTextContents(), [
-    "@maya, @sam", "@ada", "@morgan", "@jules"
+    "@maya, @sam", "@ada", "@jules", "@morgan"
   ]);
-  assert.deepEqual(await page.locator(".gns-result").evaluateAll((rows) => rows.map((row) => row.dataset.unread)), ["true", "true", "false", "true"]);
+  assert.deepEqual(await page.locator(".gns-result").evaluateAll((rows) => rows.map((row) => row.dataset.unread)), ["true", "true", "true", "false"]);
   assert.equal(await page.locator(".gns-time[datetime]").count(), 4);
   for (const text of await page.locator(".gns-time").allTextContents()) {
     assert.match(text, /^(just now|\d+ (min|hr|days|wk) ago|yesterday|[A-Z][a-z]{2} \d+(, \d{4})?)$/);
   }
-  assert.deepEqual(await page.locator(".gns-kind").evaluateAll((nodes) => nodes.map((node) => node.dataset.kind)), ["issue", "pull", "discussion", "issue"]);
+  assert.deepEqual(await page.locator(".gns-kind").evaluateAll((nodes) => nodes.map((node) => node.dataset.kind)), ["issue", "pull", "issue", "discussion"]);
   assert.match(await page.locator(".gns-result-number").first().textContent(), /^#\d+$/);
   assert.equal(await page.locator(".gns-menu-panel").isVisible(), false);
   await openMenu();
@@ -488,12 +488,12 @@ test("expands repository groups and all their pages without dropping matches or 
     [next]: { rows: [fixture.pages[1][0]], next: null },
     [second]: { rows: [{ ...fixture.pages[2][0], href: "/acme/other/issues/84", reason: "commented" }], next: null }
   };
-  await seed([...fixture.subscriptions, "https://github.com/acme/other/issues/84"]);
+  await seed([...fixture.subscriptions.slice(0, 3), "https://github.com/acme/other/issues/84"]);
   await openFilter();
   await complete();
   assert.equal(await page.locator(".gns-result").count(), 4);
   assert.match(await page.locator(".gns-status").textContent(), /5 notifications checked across 4 pages/);
-  assert.equal(await page.locator(".gns-reason").last().textContent(), "commented");
+  assert.equal(await page.locator(".gns-result", { has: page.locator('a[href*="/acme/other/issues/84"]') }).locator(".gns-reason").textContent(), "commented");
   assert.deepEqual(routeState.requests.map((request) => new URL(request.url).search), ["", first, next, second]);
   assert.equal(await page.locator(".js-notifications-group-view-all").first().isVisible(), false);
   assert.equal(await page.evaluate(() => window.fixtureWrites), 0);
@@ -573,7 +573,7 @@ test("previews modern discussion comments and supported review or commit fragmen
   routeState.modern = true;
   await openFilter();
   await complete();
-  const discussion = page.locator(".gns-result").nth(2);
+  const discussion = page.locator(".gns-result").nth(3);
   await (await previewToggle(discussion)).click();
   await eventually(async () => (await discussion.locator(".gns-preview-text").textContent()).includes("keyboard fix"), "Modern discussion comment did not load");
   for (const fragment of ["pullrequestreview-123", "discussion_r123", "r123", "commitcomment-123"]) {
@@ -649,7 +649,7 @@ test("closing or removing a row cancels its preview without stale results or err
 test("does not invent a reason from an item title or participant name", async () => {
   routeState.rows = [{ href: "/acme/console/issues/11", title: "mention", unread: true, participants: ["author"] }];
   routeState.next = null;
-  await seed();
+  await seed([fixture.subscriptions[0]]);
   await openFilter();
   await complete();
   assert.equal(await page.locator(".gns-reason").count(), 0);
@@ -968,8 +968,41 @@ test("Pause and Continue preserve progress without duplicating results", async (
   assert.equal(await page.locator(".gns-result").count(), 4);
 });
 
+test("saved items without an inbox notification appear with their latest update, unread first then newest", async () => {
+  routeState.rows = [
+    { ...fixture.pages[0][2], unread: false, dateTime: "2026-01-05T10:00:00Z" },
+    { ...fixture.pages[0][0], unread: true, dateTime: "2026-01-04T10:00:00Z" }
+  ];
+  routeState.next = null;
+  await seed([fixture.subscriptions[0], fixture.subscriptions[1], fixture.subscriptions[3]]);
+  await enableSummaries(true);
+  await openFilter();
+  await complete();
+  await eventually(async () => (await page.locator(".gns-quiet-pill").count()) === 1, "Quiet saved item did not appear");
+  await summarized(3);
+  const rows = page.locator(".gns-result");
+  assert.deepEqual(await rows.locator(".gns-result-link").evaluateAll((links) => links.map((link) => new URL(link.href).pathname)), [
+    "/acme/console/issues/11", "/acme/console/issues/84", "/acme/console/pull/42"
+  ]);
+  const quiet = rows.nth(1);
+  assert.equal(await quiet.locator(".gns-quiet-pill").textContent(), "latest activity");
+  assert.equal(await quiet.locator(".gns-time").getAttribute("datetime"), "2026-09-25T17:30:00Z");
+  assert.equal(await quiet.getAttribute("data-unread"), "false");
+  await page.screenshot({ path: path.join(resultsPath, "subscriptions-quiet-item.png"), fullPage: true });
+  assert.equal(previewRequests().filter((request) => request.url.includes("/issues/84")).length, 1);
+  const chats = (await aiState()).calls.filter((call) => call.url.endsWith("/api/chat"));
+  assert.ok(chats.some((call) => JSON.stringify(call.body).includes("A newer comment that did not trigger this notification.")), "Quiet summary did not use the latest comment");
+
+  await page.reload();
+  await page.locator("[data-gns-panel]").waitFor();
+  await complete();
+  await eventually(async () => (await page.locator(".gns-quiet-pill").count()) === 1, "Quiet saved item did not reappear from cache");
+  assert.equal(previewRequests().filter((request) => request.url.includes("/issues/84")).length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("Refresh rereads the first page instead of reusing stale DOM", async () => {
-  await seed();
+  await seed([fixture.subscriptions[3]]);
   await openFilter();
   await complete();
   routeState.rows = [{ href: "/acme/console/issues/84", title: "An updated notification", unread: true }];
@@ -1042,14 +1075,15 @@ test("handles supported alternate row markup and an empty GitHub inbox", async (
   routeState.empty = true;
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await complete();
-  assert.equal(await page.locator(".gns-result").count(), 0);
-  assert.equal(await page.getByRole("heading", { name: "No matching inbox notifications" }).isVisible(), true);
+  await eventually(async () => (await page.locator(".gns-quiet-pill").count()) === 4, "Saved items without notifications did not appear");
+  assert.equal(await page.locator(".gns-result").count(), 4);
+  assert.equal(await page.getByRole("heading", { name: "No matching inbox notifications" }).count(), 0);
 });
 
 test("treats notification titles as text, never executable HTML", async () => {
   routeState.rows = [{ href: "/acme/console/issues/11", title: '<img src=x onerror="window.injected=true">', unread: true }];
   routeState.next = null;
-  await seed();
+  await seed([fixture.subscriptions[0]]);
   await openFilter();
   await complete();
   assert.match(await page.locator(".gns-result-title").textContent(), /<img/);
@@ -1139,7 +1173,7 @@ test("configures a local model and saves summaries without storing full source c
 });
 
 test("manual summary batches start higher-priority notifications before earlier low-priority rows", async () => {
-  await seed();
+  await seed(fixture.subscriptions.slice(0, 2));
   await enableSummaries();
   const dateTime = new Date().toISOString();
   routeState.rows = [
@@ -1774,7 +1808,7 @@ test("keeps long titles and expanded comments readable across row widths", async
     summary: `The update keeps notification details visible while making summaries easier to scan. It includes ${"LongIdentifier".repeat(12)}.`,
     action: "Review the keyboard fix before release.", response: "unclear", evidence: ""
   } });
-  await seed();
+  await seed([fixture.subscriptions[1]]);
   await enableSummaries(true);
   await openFilter();
   await complete();

@@ -7,6 +7,15 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+### Added
+- **Saved items always show:** Every saved item now appears in Subscriptions, even when it has no inbox notification. Those rows are marked **Latest activity** and summarize the item's latest comment. Signalbox checks three pages at a time and reuses them for 10 minutes; **Refresh** checks again.
+
+### Changed
+- **Subscriptions order:** Unread notifications come first, then everything else from newest to oldest.
+
+### Fixed
+- **Comment times on older page layouts:** When reading a thread from page markup, Signalbox now finds each comment's author and time instead of leaving them blank.
+
 ---
 
 ## [1.9.1] - 2026-11-04

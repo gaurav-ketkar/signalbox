@@ -913,8 +913,17 @@
 }
 
 .gns-priority-badge::before,
-.gns-repo-pill::before {
+.gns-repo-pill::before,
+.gns-quiet-pill::before {
   display: none;
+}
+
+/* Saved item with no inbox notification: a dashed outline reads as "nothing new arrived". */
+.gns-quiet-pill {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px dashed var(--gns-border);
+  border-radius: 999px;
 }
 
 .gns-repo-pill {

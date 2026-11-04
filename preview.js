@@ -170,7 +170,9 @@
     for (const bodyNode of topBodies) {
       const text = cleanBodyNode(bodyNode);
       if (!text) continue;
-      const wrapper = bodyNode.closest?.(".timeline-comment, .react-issue-comment, .js-timeline-item, .border-top, .Box, article, section, div") || bodyNode.parentElement;
+      // Prefer a real comment container; the body itself is often a div, so generic matches start at its parent.
+      const wrapper = bodyNode.closest?.(".timeline-comment, .react-issue-comment, .js-timeline-item") ||
+        bodyNode.parentElement?.closest?.(".border-top, .Box, article, section, div") || bodyNode.parentElement;
       const authorNode = wrapper?.querySelector?.("a.author, [data-testid='comment-header'] a[data-testid='avatar-link'], [data-testid='comment-author'], .author, span.text-bold");
       const timeNode = wrapper?.querySelector?.("relative-time[datetime], time[datetime]");
       const rawDate = timeNode?.getAttribute?.("datetime") || "";

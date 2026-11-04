@@ -26,6 +26,9 @@
   let view = null;
   let nativeView = null;
   const SCAN_CACHE_PREFIX = "scan-cache:v1:";
+  const QUIET_CACHE_PREFIX = "quiet-cache:v1:";
+  const QUIET_PARALLEL = 3;
+  const QUIET_STATES = { open: "Open", closed: "Closed", merged: "Merged", draft: "Draft" };
   const TODAY_BRIEFING_PREFIX = "today-briefing:v2:";
   const LEGACY_TODAY_BRIEFING_PREFIX = "today-briefing:v1:";
   const BRIEFING_GROUPS = [
@@ -972,8 +975,8 @@
         return p.qualifies && p.tier === "P1";
       }).length) : "P1";
     let activeSubCount = null;
-    if (view?.cacheLoaded) {
-      const subMatches = [...view.items.values()].filter((item) => subscriptions.has(item.key));
+    if (view?.cacheLoaded && view.mode === "subscriptions") {
+      const subMatches = subscriptionMatches(view);
       const subVisible = view.showCaughtUp ? subMatches : subMatches.filter((item) => !caughtUp(view, item));
       activeSubCount = subVisible.length;
     }
@@ -1027,7 +1030,7 @@
       setText(link.querySelector(".gns-filter-name"), filter.name);
       setText(link.querySelector(".gns-count"), !ready ? "..." : activeSubCount !== null ? String(activeSubCount) : String(subscriptions.size));
       link.querySelector(".gns-count").title = activeSubCount !== null ?
-        `${activeSubCount} active inbox notifications (${subscriptions.size} saved in subscription list)` :
+        `${activeSubCount} to review (${subscriptions.size} saved in subscription list)` :
         `${subscriptions.size} items in your subscription list`;
       if (activeMode === "subscriptions") link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
@@ -1418,6 +1421,7 @@
       contextWindow: summaryApi.contextWindowForModel(summarySettings.model),
       modelCheckPromise: null, modelCheckModel: "", summariesPaused: false,
       paused: false, error: "", started: false, scanned: new Map(), cacheLoaded: false, checkedAt: 0,
+      quiet: new Map(), quietPending: new Set(), quietRunning: false, quietCache: null, quietError: "", fresh: false,
       useDocument: !location.search, signature: mode + "|" + location.pathname + location.search + "|" + signedInLogin()
     };
   }
@@ -1668,14 +1672,16 @@
     const details = element("details", "gns-preview");
     const exactTarget = core.commentTarget(item.href);
     const target = core.summaryTarget ? core.summaryTarget(item.href) : exactTarget;
-    const disclosure = element("summary", "", exactTarget ? "Preview linked comment" : "Comment unavailable");
+    const disclosure = element("summary", "", exactTarget ? "Preview linked comment" : item.quiet ? "No linked comment" : "Comment unavailable");
     if (exactTarget) disclosure.append(element("span", "gns-preview-caution", " (may mark read)"));
     const status = element("p", "gns-preview-status", exactTarget ?
-      "Expand to load the exact linked comment from GitHub." : "GitHub did not include a supported comment link with this notification.");
+      "Expand to load the exact linked comment from GitHub." : item.quiet ?
+        "This saved item has no inbox notification. Its summary covers the latest comments on the thread." :
+        "GitHub did not include a supported comment link with this notification.");
     status.setAttribute("role", "status");
     const metadata = element("p", "gns-preview-meta");
     const text = element("div", "gns-preview-text");
-    const source = element("a", "gns-text-link", "Open notification on GitHub");
+    const source = element("a", "gns-text-link", item.quiet ? "Open on GitHub" : "Open notification on GitHub");
     source.href = item.href;
     source.setAttribute("data-turbo", "false");
     const lifetime = new AbortController();
@@ -1787,6 +1793,12 @@
       }
       if (exactTarget && commentLoaded && comment) return Promise.resolve(comment);
       if (summarySourceLoaded && summarySource) return Promise.resolve(summarySource);
+      // A quiet saved item was already fetched to find its latest comment.
+      if (!refresh && item.quietSource) {
+        summarySource = item.quietSource;
+        summarySourceLoaded = true;
+        return Promise.resolve(summarySource);
+      }
       if (summarySourceRequest && !summarySourceRequest.controller.signal.aborted) return summarySourceRequest.promise;
       const controller = new AbortController();
       const signal = AbortSignal.any([controller.signal, lifetime.signal, current.previewController.signal]);
@@ -2119,7 +2131,8 @@
             signal.throwIfAborted();
           }
           setText(aiStatus, "Loading notification details...");
-          const loaded = await getSummarySource(recheck);
+          // Quiet items were just fetched (or cached for minutes) to find their latest comment; only a manual recheck refetches.
+          const loaded = await getSummarySource(recheck && !(automatic && item.quietSource));
           signal.throwIfAborted();
           if (current.authors && loaded.author) current.authors.set(item.key, loaded.author);
           if (!current.kevOffline && !current.kevScores?.has(item.key)) {
@@ -2383,6 +2396,11 @@
       repoPill.title = `Repository: ${item.repository}`;
       line.append(repoPill);
     }
+    if (item.quiet) {
+      const quiet = element("span", "gns-reason gns-quiet-pill", "latest activity");
+      quiet.title = "No inbox notification for this saved item. Showing its latest comment.";
+      line.append(quiet);
+    }
     if (isPriority) {
       const priority = computeItemPriority(current, item);
       if (priority.orgMatch) {
@@ -2425,7 +2443,7 @@
     const title = element("span", "gns-result-title", item.title);
     link.append(title);
     const number = item.label.match(/#\d+$/)?.[0];
-    if (number) link.append(" ", element("span", "gns-result-number", number));
+    if (number && !item.title.endsWith(number)) link.append(" ", element("span", "gns-result-number", number));
     const heading = element("div", "gns-result-heading");
     heading.append(link);
     const signals = rowSignals(item, current);
@@ -2776,14 +2794,13 @@
           .map(({ item }) => item));
     const matches = !ready ? [] : isToday ?
       allPriorityMatches.filter((item) => computeItemPriority(current, item).tier === "P1") :
-      isPriority ? allPriorityMatches :
-      [...current.items.values()].filter((item) => subscriptions.has(item.key));
+      isPriority ? allPriorityMatches : subscriptionMatches(current);
     const reviewed = matches.filter((item) => caughtUp(current, item));
     const visible = current.showCaughtUp ? matches : matches.filter((item) => !caughtUp(current, item));
     const keys = new Set(visible.map((item) => item.key));
     let moveFocus = false;
     for (const [key, node] of current.rendered) {
-      if (!keys.has(key) || node.dataset.activity !== storeApi.activityToken(current.items.get(key))) {
+      if (!keys.has(key) || node.dataset.activity !== storeApi.activityToken(itemFor(current, key))) {
         if (node.contains(document.activeElement)) moveFocus = true;
         current.commentTools.get(key)?.cancel();
         current.commentTools.delete(key);
@@ -2845,14 +2862,16 @@
     renderSummaryControls(current);
 
     const hasItems = ready && (isPriority || subscriptions.size > 0);
-    const message = storageError || current.error;
+    const message = storageError || current.error || (!isPriority && current.quietError) || "";
+    const quietChecking = !isPriority ? current.quietPending.size : 0;
     current.hiddenCaughtUpCount = reviewed.length;
     setText(current.title, isToday ? "Today" : isPriority ? "Priority" : filter.name);
     setText(current.count, ready ? String(visible.length) : "");
     current.count.hidden = !ready;
     current.count.title = reviewed.length && !current.showCaughtUp ?
       `${visible.length} visible (${reviewed.length} hidden as caught up; ${subscriptions.size} total saved in list)` :
-      `${visible.length} matching ${visible.length === 1 ? "notification" : "notifications"}`;
+      isPriority ? `${visible.length} matching ${visible.length === 1 ? "notification" : "notifications"}` :
+        `${visible.length} saved ${visible.length === 1 ? "item" : "items"}`;
     current.count.setAttribute("aria-label", current.count.title);
     for (const todayBadge of document.querySelectorAll("[data-gns-today-filter] .gns-count")) {
       if (isPriority && current.cacheLoaded) {
@@ -2871,7 +2890,7 @@
     if (!isPriority && current.cacheLoaded) {
       for (const subBadge of document.querySelectorAll("[data-gns-filter] .gns-count")) {
         setText(subBadge, String(visible.length));
-        subBadge.title = `${visible.length} active inbox notifications (${subscriptions.size} saved in subscription list)`;
+        subBadge.title = `${visible.length} to review (${subscriptions.size} saved in subscription list)`;
       }
     }
     const scanned = `${current.state.rowCount.toLocaleString()} notifications checked across ${current.state.pages} ${current.state.pages === 1 ? "page" : "pages"}`;
@@ -2879,6 +2898,7 @@
     const progress = !ready || !current.cacheLoaded ? "Loading saved subscriptions..." :
       !hasItems ? "Your list is local to this Chrome profile." :
       message ? `Search incomplete. ${scanned}.` :
+      current.state.complete && quietChecking ? `Inbox search complete. ${scanned}. Checking ${quietChecking} saved ${quietChecking === 1 ? "item" : "items"} with no inbox notification...` :
       current.state.complete ? `Inbox search complete. ${scanned}.${checked}` :
       current.paused ? `Search paused. ${scanned}.` : `Searching your inbox... ${scanned}.`;
     setText(current.status, progress);
@@ -2895,15 +2915,15 @@
       isPriority ? "Scanning your inbox for direct asks, leadership activity, and recent updates." : "Your saved list will appear here.";
     if (ready && !hasItems) {
       emptyTitle = "Choose what belongs here";
-      emptyText = "Add issue, pull request, or discussion links. Only their inbox notifications will appear.";
+      emptyText = "Add issue, pull request, or discussion links. Each one appears here with its latest update.";
     } else if (hasItems) {
       emptyTitle = message ? "The search needs attention" :
-        current.state.complete ? (isToday ? "No P1 notifications today" : isPriority ? "No priority notifications right now" : "No matching inbox notifications") :
+        current.state.complete ? (isToday ? "No P1 notifications today" : isPriority ? "No priority notifications right now" : "Checking your saved items") :
         current.paused ? "Search paused" : (isToday ? "Finding P1 notifications" : isPriority ? "Scoring your notifications" : "Looking for your subscriptions");
       emptyText = current.state.complete ?
         (isToday ? "None of your inbox notifications crossed the P1 threshold (score ≥ 70)." :
           isPriority ? "None of your inbox notifications crossed the Priority threshold (score ≥ 35)." :
-          "None of the inbox notifications match your list. Completed notifications are still in GitHub's Done view.") :
+          "Saved items with no inbox notification appear here with their latest update.") :
         "Matches appear as pages are checked. You can leave this view or pause at any time.";
       if (reviewed.length && !visible.length) {
         emptyTitle = "You're caught up";
@@ -2945,6 +2965,7 @@
       current.resort.setAttribute("aria-label", current.resort.title);
     }
     renderLive(current);
+    if (!isPriority && current.state.complete) void loadQuietItems(current);
     if (isToday) {
       void updateTodayBriefing(current);
     }
@@ -3059,6 +3080,116 @@
     const html = await response.text();
     signal.throwIfAborted();
     return dom.readPage(new DOMParser().parseFromString(html, "text/html"), url);
+  }
+
+  // Saved items with no inbox notification still appear in Subscriptions. Each
+  // one gets a row built from its own page, timed by the latest comment there.
+  function itemFor(current, key) {
+    return current.items.get(key) || current.quiet?.get(key);
+  }
+
+  function itemTime(item) {
+    return Date.parse(item?.dateTime || "") || 0;
+  }
+
+  function subscriptionMatches(current) {
+    const items = [...current.items.values()].filter((item) => subscriptions.has(item.key));
+    for (const item of current.quiet?.values() || []) {
+      if (subscriptions.has(item.key) && !current.items.has(item.key)) items.push(item);
+    }
+    return items.sort((left, right) => Number(Boolean(right.unread)) - Number(Boolean(left.unread)) ||
+      itemTime(right) - itemTime(left));
+  }
+
+  function quietItem(saved, loaded) {
+    const parsed = core.parseItem(saved.url);
+    const login = core.normalizeLogin(core.cleanText(loaded?.author, 100).replace(/^@/, ""));
+    const dateTime = loaded?.dateTime && Number.isFinite(Date.parse(loaded.dateTime)) ? loaded.dateTime : "";
+    const state = core.normalizeState(saved.state || "");
+    return {
+      ...parsed,
+      href: parsed.url,
+      notificationId: "",
+      archiveToken: "",
+      unmarkToken: "",
+      title: core.cleanText(saved.title, 1024) || parsed.label,
+      titleFound: Boolean(core.cleanText(saved.title, 1024)),
+      reason: "",
+      reasonDescription: "",
+      participants: login ? [{ username: login, url: `${core.ORIGIN}/${login}` }] : [],
+      state: QUIET_STATES[state] || "",
+      unread: false,
+      dateTime,
+      timeText: "",
+      quiet: true,
+      quietSource: loaded?.text ? {
+        text: loaded.text, truncated: Boolean(loaded.truncated), author: loaded.author || "", dateTime
+      } : null
+    };
+  }
+
+  async function loadQuietItems(current) {
+    if (view !== current || current.mode !== "subscriptions" || !ready || !current.state.complete ||
+        current.quietRunning || current.quietError) return;
+    const queue = [...subscriptions.values()].filter((saved) => core.parseItem(saved.url) &&
+      !current.items.has(saved.key) && !current.quiet.has(saved.key));
+    if (!queue.length) return;
+    current.quietRunning = true;
+    for (const saved of queue) current.quietPending.add(saved.key);
+    const signal = current.previewController.signal;
+    const cacheKey = current.viewer ? `${QUIET_CACHE_PREFIX}${current.viewer}` : "";
+    if (!current.quietCache) {
+      let stored = null;
+      try {
+        if (cacheKey && !current.fresh && chrome.storage.session) stored = (await chrome.storage.session.get(cacheKey))[cacheKey];
+      } catch {
+        stored = null;
+      }
+      current.quietCache = stored && typeof stored === "object" ? stored : {};
+    }
+    renderView(current);
+    const worker = async () => {
+      while (queue.length && !signal.aborted && view === current && !current.quietError) {
+        const saved = queue.shift();
+        const parsed = core.parseItem(saved.url);
+        const hit = current.quietCache[saved.key];
+        let loaded = null;
+        if (hit && isFreshScanCache(current, hit.fetchedAt)) {
+          loaded = hit.loaded;
+        } else {
+          try {
+            loaded = await preview.load({ id: "thread", url: parsed.url, key: parsed.key }, { signal, allowFallback: true });
+            current.quietCache[saved.key] = {
+              fetchedAt: Date.now(),
+              loaded: loaded ? { text: loaded.text, truncated: loaded.truncated, author: loaded.author, dateTime: loaded.dateTime } : null
+            };
+          } catch (error) {
+            if (signal.aborted) return;
+            if (/rate-limit/i.test(error?.message || "")) {
+              current.quietError = "GitHub rate-limited the check for your quiet saved items. Refresh in a minute to finish.";
+            }
+            loaded = null;
+          }
+        }
+        current.quietPending.delete(saved.key);
+        const latest = subscriptions.get(saved.key);
+        if (view !== current || !latest || current.items.has(saved.key)) continue;
+        current.quiet.set(saved.key, quietItem(latest, loaded));
+        renderView(current);
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: QUIET_PARALLEL }, worker));
+    } finally {
+      for (const saved of queue) {
+        current.quietPending.delete(saved.key);
+        const latest = subscriptions.get(saved.key);
+        if (latest && !current.items.has(saved.key) && !current.quiet.has(saved.key)) current.quiet.set(saved.key, quietItem(latest, null));
+      }
+      current.quietRunning = false;
+      if (cacheKey && chrome.storage.session) chrome.storage.session.set({ [cacheKey]: current.quietCache }).catch(() => {});
+      if (view === current) renderView(current);
+    }
   }
 
   function scanCacheKey(current) {
@@ -3220,6 +3351,7 @@
     if (!view) {
       view = makeView(root, mode);
       void loadReviews(view);
+      view.fresh = fresh;
       if (fresh) view.useDocument = false;
       void loadScanCache(view, fresh);
     }
