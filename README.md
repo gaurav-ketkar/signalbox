@@ -1,9 +1,16 @@
 # Signalbox
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.svg">
+    <img src="docs/hero-light.svg" alt="Noisy GitHub notifications go into Signalbox and come out as one clean signal: three short, prioritized summaries." width="900">
+  </picture>
+</p>
+
 [![Version 1.10.0](https://img.shields.io/badge/version-1.10.0-0969da?style=flat-square)](CHANGELOG.md)
 [![Chrome Manifest V3](https://img.shields.io/badge/Chrome-Manifest%20V3-1f883d?style=flat-square&logo=googlechrome&logoColor=white)](manifest.json)
 [![AI: Local & Cloud / Copilot](https://img.shields.io/badge/AI-Local%20%7C%20GitHub%20Copilot%20%7C%20Cloud-8250df?style=flat-square)](docs/HOW_IT_WORKS.md#4-ai-summarization-pipeline-local-cloud--two-slot-hybrid-routing)
-[![Tests: 188 Passing](https://img.shields.io/badge/tests-188%20passing-1a7f37?style=flat-square)](test/)
+[![Tests: 213 Passing](https://img.shields.io/badge/tests-213%20passing-1a7f37?style=flat-square)](test/)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-59636e?style=flat-square)](LICENSE)
 
 > **Turn GitHub's notification firehose into pure signal—locally on your Mac or with your choice of Cloud / GitHub Copilot models.**
@@ -14,7 +21,7 @@ No build step required. Keep costs at **$0** with 100% local inference, or mix a
 
 ![Demo of Signalbox](docs/demo.gif)
 
-*([Watch the 19-second full-resolution MP4 demo with voice-over](docs/demo.mp4))*
+*([Watch the 39-second full-resolution MP4 demo with voice-over](docs/demo.mp4))*
 
 ## Highlights
 

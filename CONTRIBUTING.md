@@ -22,6 +22,18 @@ npm test
 npm run test:browser
 ```
 
+## Demo and Hero Assets
+
+The README demo and hero image are generated from scripts, using synthetic data only.
+
+```bash
+node scripts/hero.mjs                                   # docs/hero-light.svg and docs/hero-dark.svg
+uv run --with kokoro --with soundfile python scripts/demo-voice.py /tmp/sbx-demo   # voice-over from scripts/demo-narration.json
+node scripts/record-demo.cjs /tmp/sbx-demo              # docs/demo.mp4 and docs/demo.gif
+```
+
+The recorder loads the real extension in Playwright with a fake local model, so it needs no network or API keys. It also needs `ffmpeg`.
+
 ## Releasing
 
 Maintainers only. Versions follow [Semantic Versioning](https://semver.org/).
