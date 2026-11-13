@@ -84,7 +84,7 @@ Summaries default to 100% local loopback endpoints (**Splash** by default), with
   - **LM Studio:** `http://127.0.0.1:1234`
   - **Ollama:** `http://127.0.0.1:11434`
   - **Local Kev Triage (optional):** `http://127.0.0.1:8009`
-- **Cloud (Optional Host Permissions Granted On Demand):**
+- **Cloud (Optional Provider Selection; Host Permissions Declared at Install):**
   - **GitHub Copilot:** `https://api.githubcopilot.com` (authenticate with `gh auth token`)
   - **OpenAI:** `https://api.openai.com`
   - **Anthropic:** `https://api.anthropic.com`
@@ -128,5 +128,9 @@ Allow only the exact extension origin, not `*`. If Ollama reports HTTP 403, allo
 
 ## 6. Storage & Privacy
 
-- All data (`chrome.storage.local`) stays in your local Chrome profile: saved item URLs, their titles and open/closed state, priority rules, model selection, caught-up markers, and bounded summaries. Full source comments stay in memory only and are never persisted.
-- Zero analytics, zero cloud API calls, zero GitHub API tokens. Loopback requests reject redirects and never forward GitHub cookies.
+- Saved URLs, titles/state, priority rules, model settings, caught-up markers, and bounded summaries are stored in the local Chrome profile (`chrome.storage.local`). Full source comments are not persisted; the inbox snapshot uses memory-only `chrome.storage.session`.
+- Cloud provider tokens/API keys, when supplied, are also persisted in `chrome.storage.local`. This is profile storage, not a dedicated encrypted credential vault; protect the profile and never use production/admin credentials or commit/export tokens. Use the narrowest supported scopes and revoke credentials if the profile is exposed.
+- No analytics are collected. Local inference sends thread context only to the loopback engines listed above. Choosing a cloud provider for either model slot sends that slot's thread context to the selected provider under its data-handling terms, including potentially private repository content. Only use cloud mode when that disclosure is authorized. Provider tokens authenticate those calls; GitHub session cookies are not forwarded.
+- The manifest declares `storage`, `activeTab`, a content script on `https://github.com/*`, loopback access, and the listed cloud hosts (including `https://models.github.ai/*`). Cloud host permissions are declared at installation, not requested dynamically. GitHub page access uses the signed-in browser session for reads and existing notification actions. This extension has no listening server, public deployment, or backend user database.
+- Loopback services are separate processes, not managed by the extension. Bind them to `127.0.0.1`/`::1`, allow only the exact extension origin, and protect any privileged API with authentication and Host/Origin checks. Verify their actual IPv4/IPv6 exposure; CORS and loopback alone are not authorization.
+- Manual summary mode and model routing reduce cloud use but are not hard spending caps. Set provider-side limits where available and monitor usage. Isolation, secret/dependency scans, exposure checks, and backup/restore gates are contributor/operator responsibilities described in [Contributing](../CONTRIBUTING.md#running-tests), not controls automatically enforced by this documentation.
